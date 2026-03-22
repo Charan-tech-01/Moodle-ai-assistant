@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+groq
+pandas
+fpdf2
+openpyxl
+python-docx
+python-multipart
+python-dotenv
+aiofiles

@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: finalyear2026
+    env: docker
+    plan: free
+    autoDeploy: true
+    healthCheckPath: /health

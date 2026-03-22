@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Moodle AI Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["Manrope", "sans-serif"]
+          },
+          colors: {
+            nmitBlue: "#1b2aa6",
+            nmitYellow: "#ffbf1c",
+            nmitInk: "#07102f"
+          },
+          boxShadow: {
+            ambient: "0 32px 80px rgba(7, 16, 47, 0.28)"
+          }
+        }
+      }
+    };
+  </script>
+</head>
+<body class="min-h-screen bg-slate-100 font-sans text-slate-900">
+  <div class="fixed inset-0 -z-10 overflow-hidden">
+    <div class="absolute inset-0 bg-[linear-gradient(180deg,#07102f_0%,#1b2aa6_34%,#eef2ff_86%)]"></div>
+    <div class="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,191,28,0.18),_transparent_26%),radial-gradient(circle_at_left,_rgba(255,255,255,0.12),_transparent_22%)]"></div>
+  </div>
+
+  <main class="mx-auto max-w-7xl px-4 py-6 md:px-6 lg:px-8">
+    <section class="overflow-hidden rounded-[30px] bg-nmitBlue text-white shadow-ambient">
+      <div class="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+        <div class="relative p-6 md:p-10">
+          <div class="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.08),transparent_45%,rgba(0,0,0,0.18))]"></div>
+          <div class="relative">
+            <div class="inline-flex items-center gap-3 rounded-full bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.25em] text-blue-100">
+              NMIT Smart Campus
+            </div>
+            <h1 class="mt-5 text-4xl font-extrabold tracking-tight md:text-6xl">Moodle AI Assistant</h1>
+            <div class="mt-5 flex flex-wrap items-center gap-3 text-lg font-bold md:text-3xl">
+              <span class="text-nmitYellow">Professors</span>
+              <span class="text-white/60">|</span>
+              <span class="text-white">Students</span>
+              <span class="text-white/60">|</span>
+              <span class="text-nmitYellow">Parents</span>
+            </div>
+            <p class="mt-5 max-w-2xl text-sm leading-7 text-blue-50 md:text-base">
+              Ask academic questions, check student performance, view class teacher and mentor details, and let faculty assign mentors using the imported workbook data.
+            </p>
+          </div>
+        </div>
+
+        <div class="relative min-h-[280px] bg-[linear-gradient(180deg,rgba(7,16,47,0.08),rgba(7,16,47,0.42)),url('https://images.unsplash.com/photo-1513258496099-48168024aec0?auto=format&fit=crop&w=1200&q=80')] bg-cover bg-center">
+          <div class="absolute bottom-5 left-5 right-5 rounded-3xl border border-white/20 bg-white/10 p-5 backdrop-blur">
+            <p class="text-sm font-semibold uppercase tracking-[0.22em] text-blue-100">Live Access</p>
+            <p class="mt-2 text-2xl font-bold">Student support, faculty controls, and mentor workflows in one place.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="mt-6 grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)_320px]">
+      <aside class="space-y-6">
+        <div class="rounded-[26px] bg-white p-5 shadow-ambient/30">
+          <h2 class="text-lg font-bold text-nmitInk">Access Panel</h2>
+          <p class="mt-1 text-sm text-slate-600">Use a faculty/admin ID like `FAC001` or a student USN like `1NT23IS015`.</p>
+          <div class="mt-4 space-y-4">
+            <div>
+              <label class="mb-1 block text-sm font-semibold text-slate-700">User ID / USN</label>
+              <input id="userId" type="text" placeholder="FAC001 or 1NT23IS015" class="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none transition focus:border-nmitBlue focus:ring-2 focus:ring-blue-200" />
+            </div>
+            <div class="flex items-center justify-between gap-3 rounded-2xl bg-slate-100 px-4 py-3">
+              <span class="text-sm font-semibold text-slate-600">Detected role</span>
+              <span id="roleBadge" class="rounded-full bg-slate-300 px-3 py-1 text-sm font-bold text-slate-700">Unknown</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="rounded-[26px] bg-white p-5 shadow-ambient/30">
+          <div class="flex items-center justify-between">
+            <h2 class="text-lg font-bold text-nmitInk">Quick Profile</h2>
+            <button id="refreshContextBtn" class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">Refresh</button>
+          </div>
+          <div id="profilePanel" class="mt-4 space-y-3 text-sm text-slate-600">
+            <p>Enter a user ID to load student, mentor, and class teacher information.</p>
+          </div>
+        </div>
+
+        <div class="rounded-[26px] bg-white p-5 shadow-ambient/30">
+          <h2 class="text-lg font-bold text-nmitInk">Contacts</h2>
+          <div id="contactPanel" class="mt-4 space-y-3 text-sm text-slate-600">
+            <p>Mentor and class teacher contacts will appear here.</p>
+          </div>
+        </div>
+      </aside>
+
+      <section class="overflow-hidden rounded-[28px] bg-white shadow-ambient">
+        <div class="border-b border-slate-200 bg-slate-50 px-5 py-4">
+          <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">WhatsApp-style Academic Chat</p>
+              <h2 class="mt-1 text-2xl font-bold text-nmitInk">Ask the assistant</h2>
+            </div>
+            <div class="flex flex-wrap items-end gap-3">
+              <div>
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Output</label>
+                <select id="format" class="rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-nmitBlue focus:ring-2 focus:ring-blue-200">
+                  <option value="text">Text</option>
+                  <option value="pdf">PDF</option>
+                  <option value="excel">Excel</option>
+                  <option value="word">Word</option>
+                </select>
+              </div>
+              <button id="clearChatBtn" class="rounded-2xl bg-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-300">Clear Chat</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="chatMessages" class="h-[560px] overflow-y-auto bg-[linear-gradient(180deg,#f8fafc,#eef2ff)] px-4 py-5 md:px-6">
+          <div class="flex justify-start">
+            <div class="max-w-[85%] rounded-[24px] rounded-tl-md bg-white px-4 py-3 text-sm leading-7 text-slate-700 shadow">
+              Hi. I can answer general questions, summarize student data, show class teacher and mentor details, and help faculty assign mentors.
+            </div>
+          </div>
+        </div>
+
+        <div class="border-t border-slate-200 bg-white px-4 py-4 md:px-6">
+          <div id="loading" class="hidden items-center gap-3 rounded-2xl bg-blue-50 px-4 py-3 text-sm font-medium text-blue-900">
+            <div class="h-4 w-4 animate-spin rounded-full border-2 border-blue-900 border-t-transparent"></div>
+            Working on your request...
+          </div>
+          <div class="mt-4">
+            <label class="mb-2 block text-sm font-semibold text-slate-700">Message</label>
+            <textarea id="query" rows="4" placeholder="Ask about grades, mentor details, class teacher info, attendance, backlogs, or general concepts..." class="w-full rounded-[22px] border border-slate-300 px-4 py-3 outline-none transition focus:border-nmitBlue focus:ring-2 focus:ring-blue-200"></textarea>
+          </div>
+          <div class="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div id="chips" class="flex flex-wrap gap-2"></div>
+            <button id="submitBtn" class="rounded-[20px] bg-nmitBlue px-6 py-3 text-sm font-semibold text-white hover:bg-blue-900">Send Message</button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="space-y-6">
+        <div class="rounded-[26px] bg-white p-5 shadow-ambient/30">
+          <h2 class="text-lg font-bold text-nmitInk">Campus Snapshot</h2>
+          <div id="overviewPanel" class="mt-4 grid grid-cols-2 gap-3 text-sm">
+            <div class="rounded-2xl bg-slate-100 p-4">
+              <p class="text-slate-500">Students</p>
+              <p id="overviewStudents" class="mt-2 text-2xl font-bold text-nmitInk">-</p>
+            </div>
+            <div class="rounded-2xl bg-slate-100 p-4">
+              <p class="text-slate-500">Courses</p>
+              <p id="overviewCourses" class="mt-2 text-2xl font-bold text-nmitInk">-</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="rounded-[26px] bg-white p-5 shadow-ambient/30">
+          <h2 class="text-lg font-bold text-nmitInk">Suggested Prompts</h2>
+          <div id="promptPanel" class="mt-4 flex flex-wrap gap-2"></div>
+        </div>
+
+        <div id="mentorAssignCard" class="hidden rounded-[26px] bg-white p-5 shadow-ambient/30">
+          <h2 class="text-lg font-bold text-nmitInk">Assign Mentor</h2>
+          <p class="mt-1 text-sm text-slate-600">Visible for faculty and admin users.</p>
+          <div class="mt-4 space-y-3">
+            <input id="mentorStudentId" type="text" placeholder="Student USN" class="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-nmitBlue focus:ring-2 focus:ring-blue-200" />
+            <input id="mentorName" list="mentorDirectory" type="text" placeholder="Mentor name" class="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-nmitBlue focus:ring-2 focus:ring-blue-200" />
+            <input id="mentorEmail" type="email" placeholder="Mentor email" class="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-nmitBlue focus:ring-2 focus:ring-blue-200" />
+            <input id="mentorPhone" type="text" placeholder="Mentor phone" class="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-nmitBlue focus:ring-2 focus:ring-blue-200" />
+            <button id="assignMentorBtn" class="w-full rounded-2xl bg-nmitYellow px-4 py-3 font-semibold text-nmitInk hover:bg-yellow-400">Update Mentor</button>
+          </div>
+          <p id="mentorAssignStatus" class="mt-3 text-sm text-slate-600"></p>
+          <datalist id="mentorDirectory"></datalist>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script>
+    const examples = [
+      "Show my student profile",
+      "Who is my class teacher?",
+      "Who is my mentor and how can I contact them?",
+      "How many students are in Machine Learning?",
+      "Show attendance report for Cloud Computing",
+      "List backlog students",
+      "Explain neural networks"
+    ];
+
+    const userIdInput = document.getElementById("userId");
+    const roleBadge = document.getElementById("roleBadge");
+    const queryInput = document.getElementById("query");
+    const formatSelect = document.getElementById("format");
+    const submitBtn = document.getElementById("submitBtn");
+    const loading = document.getElementById("loading");
+    const chatMessages = document.getElementById("chatMessages");
+    const chipsContainer = document.getElementById("chips");
+    const promptPanel = document.getElementById("promptPanel");
+    const profilePanel = document.getElementById("profilePanel");
+    const contactPanel = document.getElementById("contactPanel");
+    const overviewStudents = document.getElementById("overviewStudents");
+    const overviewCourses = document.getElementById("overviewCourses");
+    const mentorAssignCard = document.getElementById("mentorAssignCard");
+    const mentorDirectory = document.getElementById("mentorDirectory");
+    const mentorStudentId = document.getElementById("mentorStudentId");
+    const mentorName = document.getElementById("mentorName");
+    const mentorEmail = document.getElementById("mentorEmail");
+    const mentorPhone = document.getElementById("mentorPhone");
+    const mentorAssignStatus = document.getElementById("mentorAssignStatus");
+    const assignMentorBtn = document.getElementById("assignMentorBtn");
+    const refreshContextBtn = document.getElementById("refreshContextBtn");
+    const clearChatBtn = document.getElementById("clearChatBtn");
+
+    function detectRole(userId) {
+      const value = (userId || "").trim().toUpperCase();
+      if (value.startsWith("ADM")) return "Admin";
+      if (value.startsWith("FAC")) return "Faculty";
+      if (value.startsWith("STU")) return "Student";
+      if (/^\d[A-Z0-9]{6,}$/.test(value)) return "Student";
+      return "Unknown";
+    }
+
+    function updateRoleBadge() {
+      const role = detectRole(userIdInput.value);
+      roleBadge.textContent = role;
+      roleBadge.className = "rounded-full px-3 py-1 text-sm font-bold";
+      if (role === "Student") roleBadge.classList.add("bg-blue-100", "text-blue-800");
+      else if (role === "Faculty") roleBadge.classList.add("bg-emerald-100", "text-emerald-800");
+      else if (role === "Admin") roleBadge.classList.add("bg-amber-100", "text-amber-800");
+      else roleBadge.classList.add("bg-slate-300", "text-slate-700");
+    }
+
+    function createPromptChip(text, container) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "rounded-full border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-nmitBlue hover:text-nmitBlue";
+      chip.textContent = text;
+      chip.addEventListener("click", () => {
+        queryInput.value = text;
+        queryInput.focus();
+      });
+      container.appendChild(chip);
+    }
+
+    function buildPrompts() {
+      chipsContainer.innerHTML = "";
+      promptPanel.innerHTML = "";
+      examples.forEach((text) => {
+        createPromptChip(text, chipsContainer);
+        createPromptChip(text, promptPanel);
+      });
+    }
+
+    function setLoading(isLoading) {
+      loading.classList.toggle("hidden", !isLoading);
+      loading.classList.toggle("flex", isLoading);
+      submitBtn.disabled = isLoading;
+      submitBtn.classList.toggle("opacity-60", isLoading);
+      submitBtn.classList.toggle("cursor-not-allowed", isLoading);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+
+    function appendMessage(content, kind = "assistant", html = false) {
+      const wrapper = document.createElement("div");
+      wrapper.className = `flex ${kind === "user" ? "justify-end" : "justify-start"} mb-4`;
+
+      const bubble = document.createElement("div");
+      bubble.className = kind === "user"
+        ? "max-w-[85%] rounded-[24px] rounded-br-md bg-nmitBlue px-4 py-3 text-sm leading-7 text-white shadow"
+        : "max-w-[85%] rounded-[24px] rounded-tl-md bg-white px-4 py-3 text-sm leading-7 text-slate-700 shadow";
+
+      if (html) bubble.innerHTML = content;
+      else bubble.textContent = content;
+
+      wrapper.appendChild(bubble);
+      chatMessages.appendChild(wrapper);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function renderProfile(profile) {
+      if (!profile) {
+        profilePanel.innerHTML = "<p>Enter a valid student USN to view profile details.</p>";
+        contactPanel.innerHTML = "<p>Mentor and class teacher contacts will appear here.</p>";
+        return;
+      }
+
+      profilePanel.innerHTML = `
+        <div class="rounded-2xl bg-slate-100 p-4">
+          <p class="text-xs uppercase tracking-[0.18em] text-slate-500">${escapeHtml(profile.student_id)}</p>
+          <p class="mt-2 text-lg font-bold text-nmitInk">${escapeHtml(profile.name)}</p>
+          <p class="mt-1">${escapeHtml(profile.department)} • Sem ${escapeHtml(profile.semester)} • Sec ${escapeHtml(profile.section)}</p>
+          <div class="mt-3 grid grid-cols-2 gap-2 text-xs">
+            <div class="rounded-xl bg-white p-3"><span class="text-slate-500">CGPA</span><p class="mt-1 text-base font-bold text-nmitInk">${escapeHtml(profile.cgpa)}</p></div>
+            <div class="rounded-xl bg-white p-3"><span class="text-slate-500">Attendance</span><p class="mt-1 text-base font-bold text-nmitInk">${escapeHtml(profile.attendance_percent)}%</p></div>
+            <div class="rounded-xl bg-white p-3"><span class="text-slate-500">Course</span><p class="mt-1 text-base font-bold text-nmitInk">${escapeHtml(profile.course)}</p></div>
+            <div class="rounded-xl bg-white p-3"><span class="text-slate-500">Backlogs</span><p class="mt-1 text-base font-bold text-nmitInk">${escapeHtml(profile.backlog_count)}</p></div>
+          </div>
+        </div>
+      `;
+
+      contactPanel.innerHTML = `
+        <div class="rounded-2xl bg-slate-100 p-4">
+          <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Mentor</p>
+          <p class="mt-2 text-base font-bold text-nmitInk">${escapeHtml(profile.mentor.name)}</p>
+          <p class="mt-1">${escapeHtml(profile.mentor.email)}</p>
+          <p>${escapeHtml(profile.mentor.phone)}</p>
+        </div>
+        <div class="rounded-2xl bg-slate-100 p-4">
+          <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Class Teacher</p>
+          <p class="mt-2 text-base font-bold text-nmitInk">${escapeHtml(profile.class_teacher.name)}</p>
+          <p class="mt-1">${escapeHtml(profile.class_teacher.email)}</p>
+          <p>${escapeHtml(profile.class_teacher.phone)}</p>
+        </div>
+      `;
+    }
+
+    function renderContext(data) {
+      overviewStudents.textContent = data.overview?.students ?? "-";
+      overviewCourses.textContent = data.overview?.courses?.length ?? "-";
+      renderProfile(data.profile);
+
+      mentorAssignCard.classList.toggle("hidden", !data.permissions?.can_assign_mentor);
+      mentorDirectory.innerHTML = "";
+      (data.mentor_directory || []).forEach((mentor) => {
+        const option = document.createElement("option");
+        option.value = mentor.name;
+        mentorDirectory.appendChild(option);
+      });
+    }
+
+    async function loadContext() {
+      const userId = userIdInput.value.trim();
+      updateRoleBadge();
+      if (!userId) {
+        renderContext({ overview: {}, permissions: {}, profile: null, mentor_directory: [] });
+        return;
+      }
+
+      try {
+        const res = await fetch(`/user-context/${encodeURIComponent(userId)}`);
+        if (!res.ok) throw new Error("Unable to load user context");
+        const data = await res.json();
+        renderContext(data);
+      } catch (error) {
+        profilePanel.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
+      }
+    }
+
+    async function submitQuery() {
+      const user_id = userIdInput.value.trim();
+      const query = queryInput.value.trim();
+      const format = formatSelect.value;
+
+      if (!user_id || !query) {
+        alert("Please provide both User ID and a message.");
+        return;
+      }
+
+      appendMessage(query, "user");
+      queryInput.value = "";
+      setLoading(true);
+
+      try {
+        const res = await fetch("/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id, query, format })
+        });
+
+        if (!res.ok) {
+          const errorPayload = await res.json().catch(() => ({}));
+          throw new Error(errorPayload.detail || "Request failed.");
+        }
+
+        if (format === "text") {
+          const data = await res.json();
+          appendMessage(data.answer || "No response returned.");
+          if (data.user_context) renderContext(data.user_context);
+        } else {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const extension = format === "pdf" ? "pdf" : format === "excel" ? "xlsx" : "docx";
+          appendMessage(
+            `<p class="font-semibold text-nmitInk">Your ${extension.toUpperCase()} file is ready.</p>
+             <a class="mt-3 inline-flex rounded-xl bg-nmitBlue px-4 py-2 font-semibold text-white" href="${url}" download="moodle_ai_response.${extension}">Download file</a>`,
+            "assistant",
+            true
+          );
+        }
+      } catch (error) {
+        appendMessage(`Error: ${error.message}`);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function handleMentorAssignment() {
+      const actor_user_id = userIdInput.value.trim();
+      const student_id = mentorStudentId.value.trim();
+      const mentor_name = mentorName.value.trim();
+      const mentor_email = mentorEmail.value.trim();
+      const mentor_phone = mentorPhone.value.trim();
+
+      if (!actor_user_id || !student_id || !mentor_name) {
+        mentorAssignStatus.textContent = "Fill actor user ID, student USN, and mentor name.";
+        return;
+      }
+
+      mentorAssignStatus.textContent = "Updating mentor assignment...";
+      try {
+        const res = await fetch("/mentor/assign", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ actor_user_id, student_id, mentor_name, mentor_email, mentor_phone })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Mentor assignment failed.");
+        mentorAssignStatus.textContent = data.message;
+        appendMessage(`Mentor updated for ${student_id}. ${mentor_name} is now assigned.`, "assistant");
+        await loadContext();
+      } catch (error) {
+        mentorAssignStatus.textContent = error.message;
+      }
+    }
+
+    userIdInput.addEventListener("input", loadContext);
+    refreshContextBtn.addEventListener("click", loadContext);
+    submitBtn.addEventListener("click", submitQuery);
+    assignMentorBtn.addEventListener("click", handleMentorAssignment);
+    clearChatBtn.addEventListener("click", () => {
+      chatMessages.innerHTML = "";
+      appendMessage("Hi. I can answer general questions, summarize student data, show class teacher and mentor details, and help faculty assign mentors.");
+    });
+    queryInput.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        submitQuery();
+      }
+    });
+
+    buildPrompts();
+    updateRoleBadge();
+    loadContext();
+  </script>
+</body>
+</html>
