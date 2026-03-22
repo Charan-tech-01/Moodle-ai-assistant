@@ -6,7 +6,7 @@ from typing import Any, Dict
 import pandas as pd
 
 # Import the full RBAC layer
-from rbac import RoleIdentity, check_permission, faculty_scope, student_scope
+from auth import RoleIdentity, check_permission, faculty_scope, student_scope
 
 GRADE_MAP = {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0, "F": 0.0}
 CORE_COLUMNS = {
@@ -189,6 +189,85 @@ def _record_to_profile(record: pd.Series) -> Dict[str, Any]:
     }
 
 
+def _record_to_faculty_profile(
+    faculty_id: str,
+    scoped: pd.DataFrame,
+    full_df: pd.DataFrame,
+) -> Dict[str, Any]:
+    """
+    Build a faculty profile card from the rows they own in the dataset.
+    Mirrors the shape of _record_to_profile so the frontend renders identically.
+    """
+    # ── Resolve faculty name from the scoped rows ────────────────────────────
+    # The faculty column stores the name (e.g. "Dr. Asha Rao").
+    # We get it from the first scoped row, then look up the FACULTY_DIRECTORY
+    # entry by name to get email and phone.
+    fac_name_from_data = ""
+    if not scoped.empty and "faculty" in scoped.columns:
+        # Prefer rows where faculty_id matches directly
+        if "faculty_id" in scoped.columns:
+            fid_rows = scoped[scoped["faculty_id"].str.upper() == faculty_id.upper()]
+            if not fid_rows.empty:
+                fac_name_from_data = str(fid_rows.iloc[0]["faculty"]).strip()
+        if not fac_name_from_data:
+            fac_name_from_data = str(scoped.iloc[0]["faculty"]).strip()
+
+    # Find matching FACULTY_DIRECTORY entry by name
+    fac_dir_entry: Dict[str, Any] = {}
+    for entry in FACULTY_DIRECTORY:
+        if fac_name_from_data and entry["name"] == fac_name_from_data:
+            fac_dir_entry = entry
+            break
+
+    # If still not found, build a minimal entry from the CSV data
+    if not fac_dir_entry and fac_name_from_data:
+        fac_dir_entry = {"name": fac_name_from_data, "email": "", "phone": "", "role": "Faculty"}
+
+    # Course & section summary
+    courses  = sorted(scoped["course"].dropna().unique().tolist())
+    sections = sorted(scoped["section"].dropna().unique().tolist())
+    student_count = int(scoped.shape[0])
+
+    # Average stats across the faculty's students
+    avg_att  = round(float(scoped["attendance_percent"].mean()), 1) if student_count else 0.0
+    avg_cgpa = round(float(scoped["cgpa"].mean()), 2)              if student_count else 0.0
+    backlog_students = int((scoped["backlog_count"] > 0).sum())
+
+    # Class teacher role — rows where they are the class teacher
+    ct_col = "class_teacher_id" if "class_teacher_id" in scoped.columns else "class_teacher_name"
+    ct_match_val = faculty_id if ct_col == "class_teacher_id" else fac_dir_entry.get("name", faculty_id)
+    ct_rows  = full_df[full_df[ct_col] == ct_match_val]
+    ct_sections = sorted(ct_rows["section"].dropna().unique().tolist()) if not ct_rows.empty else []
+
+    # Mentor role
+    m_col = "mentor_id" if "mentor_id" in scoped.columns else "mentor_name"
+    m_match_val = faculty_id if m_col == "mentor_id" else fac_dir_entry.get("name", faculty_id)
+    mentee_rows  = full_df[full_df[m_col] == m_match_val]
+    mentee_count = int(mentee_rows.shape[0])
+
+    return {
+        # Identity
+        "faculty_id":    faculty_id,
+        "name":          fac_dir_entry.get("name", faculty_id),
+        "email":         fac_dir_entry.get("email", ""),
+        "phone":         fac_dir_entry.get("phone", ""),
+        "department":    "Information Science and Engineering",
+        "role":          fac_dir_entry.get("role", "Faculty"),
+        # Teaching scope
+        "courses":       courses,
+        "sections":      sections,
+        "student_count": student_count,
+        # Class teacher role
+        "class_teacher_sections": ct_sections,
+        # Mentor role
+        "mentee_count":  mentee_count,
+        # Aggregate student stats
+        "avg_attendance": avg_att,
+        "avg_cgpa":       avg_cgpa,
+        "backlog_students":backlog_students,
+    }
+
+
 # ── RBAC-aware data access ────────────────────────────────────────────────────
 
 def _scoped_frame(df: pd.DataFrame, identity: RoleIdentity) -> pd.DataFrame:
@@ -226,7 +305,7 @@ def get_user_context(
     Faculty only see overview counts/courses scoped to their own sections.
     Admin sees everything.
     """
-    from rbac import resolve_identity  # local import avoids circular at module level
+    from auth import resolve_identity  # local import avoids circular at module level
 
     if identity is None:
         identity = resolve_identity(user_id)
@@ -234,14 +313,33 @@ def get_user_context(
     df = _apply_mentor_overrides(_load_student_frame(data_path), assignments_path)
     scoped = _scoped_frame(df, identity)
 
-    # Profile: students get their own; faculty/admin get None (no personal profile card)
+    # Profile: students get their own row; faculty get a rich faculty card;
+    # admin gets a high-level summary card.
     profile: Dict[str, Any] | None = None
     if identity.role == "student":
         record = _find_student_row(df, identity.canonical)
         profile = _record_to_profile(record) if record is not None else None
-    elif identity.role in {"faculty", "admin"}:
-        # Faculty/admin don't have a student profile card
-        profile = None
+    elif identity.role == "faculty":
+        if not scoped.empty:
+            profile = _record_to_faculty_profile(identity.canonical, scoped, df)
+    elif identity.role == "admin":
+        # Admin sees a campus-wide summary as their "profile"
+        profile = {
+            "faculty_id":     identity.canonical,
+            "name":           "Administrator",
+            "email":          "",
+            "phone":          "",
+            "department":     "Information Science and Engineering",
+            "role":           "Admin",
+            "courses":        sorted(df["course"].dropna().unique().tolist()),
+            "sections":       sorted(df["section"].dropna().unique().tolist()),
+            "student_count":  int(df.shape[0]),
+            "class_teacher_sections": [],
+            "mentee_count":   0,
+            "avg_attendance": round(float(df["attendance_percent"].mean()), 1),
+            "avg_cgpa":       round(float(df["cgpa"].mean()), 2),
+            "backlog_students":int((df["backlog_count"] > 0).sum()),
+        }
 
     # Mentor directory: only from scoped rows (faculty sees their own students' mentors)
     mentor_directory = sorted(
@@ -290,7 +388,7 @@ def assign_mentor(
     Faculty can only assign mentors to students in their own courses/sections.
     Admin can assign to any student.
     """
-    from rbac import resolve_identity, check_permission
+    from auth import resolve_identity, check_permission
 
     if identity is None:
         identity = resolve_identity(actor_user_id)
@@ -348,21 +446,54 @@ def retrieve_data(
                 Any intent that would expose other students is blocked.
     - unknown : blocked for all organisational intents.
     """
-    from rbac import resolve_identity, check_permission, action_for_intent
+    from auth import resolve_identity, check_permission, action_for_intent
 
     if identity is None:
         identity = resolve_identity(user_id or "")
 
     # ── Permission gate ──────────────────────────────────────────────────────
+    # For students, self-access intents resolve to view_own_profile
     required_action = action_for_intent(intent)
     check_permission(identity, required_action)
 
     # ── Load & scope the base frame ──────────────────────────────────────────
-    df_full  = _apply_mentor_overrides(_load_student_frame(data_path), assignments_path)
+    df_full   = _apply_mentor_overrides(_load_student_frame(data_path), assignments_path)
     df_scoped = _scoped_frame(df_full, identity)
 
-    # Resolve entity references inside the SCOPED frame
-    course           = _find_course(df_scoped, entity)
+    # Resolve course from both frames
+    course_in_full   = _find_course(df_full, entity)
+    course_in_scoped = _find_course(df_scoped, entity)
+
+    # ── Faculty cross-scope guard (entity-based) ─────────────────────────────
+    # If entity names a real course that exists in the full dataset but NOT in
+    # the faculty's scoped frame, block immediately.
+    if identity.role == "faculty" and course_in_full and not course_in_scoped:
+        raise PermissionError(
+            f"[FACULTY] You do not have access to course '{course_in_full}'. "
+            "You can only view data for courses where you are the assigned faculty or class teacher."
+        )
+
+    # ── Faculty cross-scope guard (raw-query / full-text fallback) ──────────
+    # The classifier sometimes returns entity="general" even when the query
+    # explicitly names a course ("get me students from Cloud Computing").
+    # main.py now passes the full raw query as entity for faculty, so
+    # _find_course will scan the text and find the course name.
+    # Belt-and-suspenders: if we still have no course match, check whether
+    # any course name from the *full* dataset appears verbatim in the entity
+    # string (which may be the full query text) and block if it's out of scope.
+    if identity.role == "faculty" and not course_in_full:
+        entity_lower = (entity or "").lower()
+        for c in df_full["course"].dropna().unique():
+            if c.lower() in entity_lower:
+                # Found a course name in the query — check if it's in scope
+                if _find_course(df_scoped, c) is None:
+                    raise PermissionError(
+                        f"[FACULTY] You do not have access to course '{c}'. "
+                        "You can only view data for courses where you are the assigned faculty or class teacher."
+                    )
+                break
+
+    course = course_in_scoped   # safe to use from here on
     requester_record = _find_student_row(df_full, _extract_student_id(user_id))
 
     # For student_profile / mentor / contact / class_teacher intents, the
@@ -383,11 +514,11 @@ def retrieve_data(
             usn = requester_record["student_id"]
             filtered = filtered[filtered["student_id"] == usn]
         else:
-            filtered = filtered.iloc[0:0]  # no matching record → empty
+            filtered = filtered.iloc[0:0]
 
-    # ── Extra faculty guard: cross-course block ──────────────────────────────
-    # If the entity resolves to a specific course but the faculty has no rows
-    # in that course, deny access entirely.
+    # ── Faculty empty-result guard ───────────────────────────────────────────
+    # If after all filtering the faculty still gets zero rows for a specific
+    # course request, deny rather than silently return wrong data.
     if identity.role == "faculty" and course and filtered.empty:
         raise PermissionError(
             f"[FACULTY] You do not have access to course '{course}'. "

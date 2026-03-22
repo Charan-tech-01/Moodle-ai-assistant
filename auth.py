@@ -52,8 +52,9 @@ _ROLE_PERMISSIONS: dict[str, set[str]] = {
         "general_query",
     },
     "student": {
-        "view_own_profile",
+        "view_own_profile",        # profile, mentor, class teacher, backlogs — own record only
         "view_contact_details",    # own contacts only — enforced at data layer
+        "view_backlog_report",     # own backlogs only — enforced at data layer
         "general_query",
     },
     "unknown": {
@@ -130,35 +131,40 @@ def check_permission(identity: RoleIdentity, action: str) -> None:
 
 def faculty_scope(identity: RoleIdentity, df: Any) -> Any:
     """
-    Given a RoleIdentity for a faculty member, return the subset of the
-    DataFrame that the faculty member is allowed to see (rows where they
-    are the assigned faculty OR the class teacher).
+    Return the subset of df the faculty member is allowed to see.
+    Matches on faculty_id / class_teacher_id columns first (preferred —
+    these exist in the updated CSV), then falls back to name matching.
 
-    For admin, returns the full DataFrame unchanged.
-    For other roles, returns an empty DataFrame (caller should use
-    their own narrower filter instead).
-
-    Parameters
-    ----------
-    identity : RoleIdentity
-    df       : pandas DataFrame with at least 'faculty' and
-               'class_teacher_name' columns.
-
-    Returns
-    -------
-    pandas DataFrame
+    Scope = rows where the faculty is the course instructor OR class teacher.
+    Admin → full DataFrame. Non-faculty → empty DataFrame.
     """
     if identity.role == "admin":
         return df
 
     if identity.role != "faculty":
-        # Students and unknowns must never reach this helper
-        return df.iloc[0:0]  # empty, same schema
+        return df.iloc[0:0]
 
-    canonical = identity.canonical.upper()
+    canonical = identity.canonical.upper()   # e.g. "FAC001"
 
-    # Match on faculty column (course instructor) OR class_teacher_name
-    faculty_col = df["faculty"].str.strip().str.upper() if "faculty" in df.columns else None
+    # ── Priority 1: match on *_id columns (new CSV format) ──────────────────
+    has_fac_id = "faculty_id"        in df.columns
+    has_ct_id  = "class_teacher_id"  in df.columns
+
+    if has_fac_id or has_ct_id:
+        masks = []
+        if has_fac_id:
+            masks.append(df["faculty_id"].str.strip().str.upper() == canonical)
+        if has_ct_id:
+            masks.append(df["class_teacher_id"].str.strip().str.upper() == canonical)
+        combined = masks[0]
+        for m in masks[1:]:
+            combined = combined | m
+        scoped = df[combined]
+        if not scoped.empty:
+            return scoped
+
+    # ── Priority 2: match on name columns (old CSV / fallback) ──────────────
+    faculty_col = df["faculty"].str.strip().str.upper()           if "faculty"            in df.columns else None
     ct_col      = df["class_teacher_name"].str.strip().str.upper() if "class_teacher_name" in df.columns else None
 
     if faculty_col is not None and ct_col is not None:
@@ -168,17 +174,14 @@ def faculty_scope(identity: RoleIdentity, df: Any) -> Any:
     elif ct_col is not None:
         mask = ct_col == canonical
     else:
-        # No usable column — return empty to fail safe
         return df.iloc[0:0]
 
     scoped = df[mask]
+    if not scoped.empty:
+        return scoped
 
-    # If no rows matched by exact ID, try name-based fuzzy match
-    # (faculty IDs in the CSV may be stored as names, not IDs)
-    if scoped.empty:
-        scoped = _faculty_scope_by_name(identity, df)
-
-    return scoped
+    # ── Priority 3: fuzzy name search using the raw user_id string ──────────
+    return _faculty_scope_by_name(identity, df)
 
 
 def student_scope(identity: RoleIdentity, df: Any) -> Any:
@@ -196,14 +199,16 @@ def student_scope(identity: RoleIdentity, df: Any) -> Any:
 
 #: Maps classifier intent strings to the RBAC action that must be permitted.
 INTENT_ACTION_MAP: dict[str, str] = {
+    # Faculty/admin only
     "student_count":     "view_course_data",
     "course_enrollment": "view_course_data",
     "faculty_list":      "view_course_data",
     "grades_average":    "view_course_data",
     "attendance_report": "view_course_data",
-    "student_profile":   "view_student_record",
-    "mentor_lookup":     "view_student_record",
-    "class_teacher_info":"view_student_record",
+    # Self-access — students allowed on own record
+    "student_profile":   "view_own_profile",
+    "mentor_lookup":     "view_own_profile",
+    "class_teacher_info":"view_own_profile",
     "backlog_report":    "view_backlog_report",
     "contact_lookup":    "view_contact_details",
     "general":           "general_query",
