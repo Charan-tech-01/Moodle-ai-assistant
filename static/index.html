@@ -3,457 +3,1136 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Moodle AI Assistant</title>
+  <title>Moodle AI · NMIT</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ["Manrope", "sans-serif"]
-          },
-          colors: {
-            nmitBlue: "#1b2aa6",
-            nmitYellow: "#ffbf1c",
-            nmitInk: "#07102f"
-          },
-          boxShadow: {
-            ambient: "0 32px 80px rgba(7, 16, 47, 0.28)"
-          }
-        }
-      }
-    };
-  </script>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap" rel="stylesheet">
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --ink:       #0c0f1a;
+      --ink-2:     #1e2235;
+      --ink-3:     #3a3f55;
+      --muted:     #8b90a8;
+      --border:    #e4e6ef;
+      --surface:   #f5f6fa;
+      --white:     #ffffff;
+      --accent:    #2347f5;
+      --accent-2:  #1535c8;
+      --gold:      #e8a020;
+      --gold-lt:   #fef3dc;
+      --green:     #13a05e;
+      --green-lt:  #e2f5ec;
+      --red-lt:    #fdeaea;
+      --red:       #d93c3c;
+
+      --radius-sm: 10px;
+      --radius:    16px;
+      --radius-lg: 22px;
+      --radius-xl: 28px;
+
+      --shadow-sm: 0 1px 3px rgba(12,15,26,.06), 0 1px 2px rgba(12,15,26,.04);
+      --shadow:    0 4px 16px rgba(12,15,26,.08), 0 1px 4px rgba(12,15,26,.05);
+      --shadow-lg: 0 12px 40px rgba(12,15,26,.12), 0 2px 8px rgba(12,15,26,.06);
+
+      --font-display: 'Instrument Serif', Georgia, serif;
+      --font-body:    'DM Sans', system-ui, sans-serif;
+    }
+
+    html { font-size: 15px; }
+
+    body {
+      font-family: var(--font-body);
+      background: #eef0f8;
+      color: var(--ink);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+    /* ══════════════════════════════════════════
+       LAYOUT
+    ══════════════════════════════════════════ */
+    .app-shell {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 100vh;
+    }
+
+    /* ── Top Nav ── */
+    .topnav {
+      background: var(--ink);
+      color: var(--white);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      height: 58px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      gap: 16px;
+    }
+
+    .topnav-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .topnav-logo {
+      width: 32px;
+      height: 32px;
+      background: var(--accent);
+      border-radius: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      color: #fff;
+      font-family: var(--font-display);
+      font-style: italic;
+    }
+
+    .topnav-name {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.2px;
+    }
+
+    .topnav-tag {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .topnav-id-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(255,255,255,.07);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: var(--radius);
+      padding: 5px 14px 5px 5px;
+    }
+
+    .topnav-id-wrap input {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--white);
+      font-family: var(--font-body);
+      font-size: 13.5px;
+      width: 160px;
+      padding: 4px 6px;
+    }
+
+    .topnav-id-wrap input::placeholder { color: rgba(255,255,255,.35); }
+
+    .role-pill {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 99px;
+      letter-spacing: 0.02em;
+      background: rgba(255,255,255,.12);
+      color: rgba(255,255,255,.7);
+      transition: all .2s;
+    }
+    .role-pill.student  { background: rgba(35,71,245,.28); color: #8faeff; }
+    .role-pill.faculty  { background: rgba(19,160,94,.22); color: #5ddaa4; }
+    .role-pill.admin    { background: rgba(232,160,32,.22); color: #f5c76a; }
+
+    /* ── Main grid ── */
+    .workspace {
+      display: grid;
+      grid-template-columns: 280px 1fr 280px;
+      gap: 18px;
+      padding: 18px 20px;
+      max-width: 1440px;
+      margin: 0 auto;
+      width: 100%;
+      align-items: start;
+    }
+
+    /* ══════════════════════════════════════════
+       CARDS
+    ══════════════════════════════════════════ */
+    .card {
+      background: var(--white);
+      border-radius: var(--radius-xl);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 16px 20px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .card-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+    }
+
+    .card-body { padding: 14px 20px 20px; }
+
+    /* ══════════════════════════════════════════
+       LEFT SIDEBAR
+    ══════════════════════════════════════════ */
+    .sidebar-left { display: flex; flex-direction: column; gap: 14px; }
+    .sidebar-right { display: flex; flex-direction: column; gap: 14px; }
+
+    /* ── Profile card ── */
+    .profile-empty {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .profile-name {
+      font-family: var(--font-display);
+      font-size: 21px;
+      line-height: 1.2;
+      color: var(--ink);
+      margin-bottom: 2px;
+    }
+
+    .profile-meta {
+      font-size: 12.5px;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+
+    .stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .stat-box {
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      border: 1px solid var(--border);
+    }
+
+    .stat-label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      margin-bottom: 4px;
+    }
+
+    .stat-value {
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--ink);
+      letter-spacing: -0.5px;
+    }
+
+    .stat-box.good .stat-value  { color: var(--green); }
+    .stat-box.warn .stat-value  { color: var(--gold); }
+    .stat-box.bad  .stat-value  { color: var(--red); }
+
+    /* ── Contact card ── */
+    .contact-block {
+      padding: 12px 14px;
+      border-radius: var(--radius);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      margin-bottom: 8px;
+    }
+
+    .contact-block:last-child { margin-bottom: 0; }
+
+    .contact-role {
+      font-size: 10.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .contact-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ink);
+      margin-bottom: 3px;
+    }
+
+    .contact-info {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.7;
+    }
+
+    /* ══════════════════════════════════════════
+       CHAT
+    ══════════════════════════════════════════ */
+    .chat-card {
+      display: flex;
+      flex-direction: column;
+      height: calc(100vh - 58px - 36px);
+      min-height: 560px;
+      max-height: 820px;
+    }
+
+    .chat-topbar {
+      padding: 16px 22px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+
+    .chat-title {
+      font-family: var(--font-display);
+      font-size: 20px;
+      color: var(--ink);
+    }
+
+    .chat-subtitle {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 1px;
+    }
+
+    .chat-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .select-pill {
+      appearance: none;
+      background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238b90a8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 12px center;
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      padding: 6px 32px 6px 14px;
+      font-family: var(--font-body);
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--ink);
+      cursor: pointer;
+      outline: none;
+      transition: border-color .15s;
+    }
+    .select-pill:focus { border-color: var(--accent); }
+
+    .btn-ghost {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      padding: 6px 14px;
+      font-family: var(--font-body);
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--ink-3);
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .btn-ghost:hover { background: var(--border); }
+
+    /* ── Messages ── */
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      background: #f4f6fb;
+    }
+
+    .msg-row {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+    }
+
+    .msg-row.user { flex-direction: row-reverse; }
+
+    .msg-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .msg-avatar.ai   { background: var(--accent); color: #fff; }
+    .msg-avatar.user { background: var(--ink-2); color: #fff; }
+
+    .msg-bubble {
+      max-width: 78%;
+      padding: 11px 15px;
+      font-size: 13.5px;
+      line-height: 1.65;
+      border-radius: var(--radius-lg);
+    }
+
+    .msg-row.ai   .msg-bubble { background: var(--white); color: var(--ink); border: 1px solid var(--border); border-bottom-left-radius: 5px; box-shadow: var(--shadow-sm); }
+    .msg-row.user .msg-bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 5px; }
+
+    /* ── Input area ── */
+    .chat-input-area {
+      padding: 16px 22px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      background: var(--white);
+    }
+
+    .chips-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 12px;
+    }
+
+    .chip {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--ink-3);
+      cursor: pointer;
+      transition: all .15s;
+      white-space: nowrap;
+    }
+
+    .chip:hover {
+      background: #eaedfa;
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .input-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-end;
+    }
+
+    .chat-textarea {
+      flex: 1;
+      resize: none;
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 12px 16px;
+      font-family: var(--font-body);
+      font-size: 13.5px;
+      color: var(--ink);
+      background: var(--surface);
+      outline: none;
+      line-height: 1.55;
+      transition: border-color .15s, background .15s;
+    }
+
+    .chat-textarea::placeholder { color: var(--muted); }
+    .chat-textarea:focus { border-color: var(--accent); background: var(--white); }
+
+    .btn-send {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      padding: 12px 20px;
+      font-family: var(--font-body);
+      font-size: 13.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, transform .1s;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .btn-send:hover { background: var(--accent-2); }
+    .btn-send:active { transform: scale(.97); }
+    .btn-send:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+
+    /* loading */
+    .loading-bar {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      font-size: 12.5px;
+      color: var(--accent);
+      font-weight: 500;
+      margin-bottom: 10px;
+    }
+
+    .loading-bar.active { display: flex; }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(35,71,245,.2);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .65s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ══════════════════════════════════════════
+       RIGHT SIDEBAR
+    ══════════════════════════════════════════ */
+
+    /* overview stats */
+    .overview-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .ov-box {
+      background: var(--ink);
+      color: var(--white);
+      border-radius: var(--radius);
+      padding: 14px;
+    }
+
+    .ov-box.light {
+      background: var(--surface);
+      color: var(--ink);
+      border: 1px solid var(--border);
+    }
+
+    .ov-label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .07em;
+    }
+
+    .ov-box:not(.light) .ov-label { color: rgba(255,255,255,.5); }
+
+    .ov-value {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -1px;
+      margin-top: 6px;
+      font-family: var(--font-display);
+    }
+
+    /* suggested prompts */
+    .prompt-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .prompt-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      font-size: 12.5px;
+      color: var(--ink-3);
+      cursor: pointer;
+      transition: all .15s;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .prompt-item::before {
+      content: '';
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--border);
+      flex-shrink: 0;
+      transition: background .15s;
+    }
+
+    .prompt-item:hover {
+      background: #eaedfa;
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .prompt-item:hover::before { background: var(--accent); }
+
+    /* ── Mentor assign card ── */
+    #mentorAssignCard {
+      display: none;
+    }
+    #mentorAssignCard.visible {
+      display: block;
+    }
+
+    .field-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .field-input {
+      width: 100%;
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      font-family: var(--font-body);
+      font-size: 13px;
+      color: var(--ink);
+      background: var(--surface);
+      outline: none;
+      transition: border-color .15s;
+    }
+
+    .field-input::placeholder { color: var(--muted); }
+    .field-input:focus { border-color: var(--accent); background: var(--white); }
+
+    .btn-gold {
+      width: 100%;
+      background: var(--gold);
+      color: var(--ink);
+      border: none;
+      border-radius: var(--radius);
+      padding: 11px 16px;
+      font-family: var(--font-body);
+      font-size: 13.5px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .15s;
+      margin-top: 4px;
+    }
+
+    .btn-gold:hover { background: #d48f18; }
+
+    .status-text {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+    }
+
+    /* ══════════════════════════════════════════
+       DIVIDER / Section label
+    ══════════════════════════════════════════ */
+    .section-eyebrow {
+      font-size: 10.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    /* refresh btn */
+    .btn-refresh {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 12px;
+      font-family: var(--font-body);
+      font-weight: 500;
+      padding: 2px 6px;
+      border-radius: 6px;
+      transition: color .15s, background .15s;
+    }
+    .btn-refresh:hover { color: var(--accent); background: var(--surface); }
+
+    /* ── Download link ── */
+    .download-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      border-radius: var(--radius);
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-top: 8px;
+      transition: background .15s;
+    }
+    .download-link:hover { background: var(--accent-2); }
+
+    /* ── Responsive ── */
+    @media (max-width: 1100px) {
+      .workspace { grid-template-columns: 240px 1fr 240px; }
+    }
+
+    @media (max-width: 860px) {
+      .workspace { grid-template-columns: 1fr; }
+      .sidebar-left, .sidebar-right { display: none; }
+    }
+  </style>
 </head>
-<body class="min-h-screen bg-slate-100 font-sans text-slate-900">
-  <div class="fixed inset-0 -z-10 overflow-hidden">
-    <div class="absolute inset-0 bg-[linear-gradient(180deg,#07102f_0%,#1b2aa6_34%,#eef2ff_86%)]"></div>
-    <div class="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,191,28,0.18),_transparent_26%),radial-gradient(circle_at_left,_rgba(255,255,255,0.12),_transparent_22%)]"></div>
-  </div>
+<body>
+<div class="app-shell">
 
-  <main class="mx-auto max-w-7xl px-4 py-6 md:px-6 lg:px-8">
-    <section class="overflow-hidden rounded-[30px] bg-nmitBlue text-white shadow-ambient">
-      <div class="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-        <div class="relative p-6 md:p-10">
-          <div class="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.08),transparent_45%,rgba(0,0,0,0.18))]"></div>
-          <div class="relative">
-            <div class="inline-flex items-center gap-3 rounded-full bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.25em] text-blue-100">
-              NMIT Smart Campus
-            </div>
-            <h1 class="mt-5 text-4xl font-extrabold tracking-tight md:text-6xl">Moodle AI Assistant</h1>
-            <div class="mt-5 flex flex-wrap items-center gap-3 text-lg font-bold md:text-3xl">
-              <span class="text-nmitYellow">Professors</span>
-              <span class="text-white/60">|</span>
-              <span class="text-white">Students</span>
-              <span class="text-white/60">|</span>
-              <span class="text-nmitYellow">Parents</span>
-            </div>
-            <p class="mt-5 max-w-2xl text-sm leading-7 text-blue-50 md:text-base">
-              Ask academic questions, check student performance, view class teacher and mentor details, and let faculty assign mentors using the imported workbook data.
-            </p>
-          </div>
+  <!-- ─── Top Nav ─────────────────────────────── -->
+  <nav class="topnav">
+    <div class="topnav-brand">
+      <div class="topnav-logo">M</div>
+      <div>
+        <div class="topnav-name">Moodle AI Assistant</div>
+        <div class="topnav-tag">NMIT Smart Campus</div>
+      </div>
+    </div>
+
+    <div class="topnav-id-wrap">
+      <div class="role-pill" id="roleBadge">Unknown</div>
+      <input id="userId" type="text" placeholder="FAC001 or 1NT23IS015" autocomplete="off" />
+    </div>
+  </nav>
+
+  <!-- ─── Workspace ───────────────────────────── -->
+  <div class="workspace">
+
+    <!-- LEFT SIDEBAR -->
+    <aside class="sidebar-left">
+
+      <!-- Profile -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Profile</span>
+          <button class="btn-refresh" id="refreshContextBtn">↺ Refresh</button>
         </div>
+        <div class="card-body" id="profilePanel">
+          <p class="profile-empty">Enter a User ID above to load student profile and performance data.</p>
+        </div>
+      </div>
 
-        <div class="relative min-h-[280px] bg-[linear-gradient(180deg,rgba(7,16,47,0.08),rgba(7,16,47,0.42)),url('https://images.unsplash.com/photo-1513258496099-48168024aec0?auto=format&fit=crop&w=1200&q=80')] bg-cover bg-center">
-          <div class="absolute bottom-5 left-5 right-5 rounded-3xl border border-white/20 bg-white/10 p-5 backdrop-blur">
-            <p class="text-sm font-semibold uppercase tracking-[0.22em] text-blue-100">Live Access</p>
-            <p class="mt-2 text-2xl font-bold">Student support, faculty controls, and mentor workflows in one place.</p>
+      <!-- Contacts -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Contacts</span>
+        </div>
+        <div class="card-body" id="contactPanel">
+          <p class="profile-empty">Mentor and class teacher details will appear here.</p>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- ─── CHAT ────────────────────────────────── -->
+    <div class="card chat-card">
+
+      <div class="chat-topbar">
+        <div>
+          <div class="chat-title">Ask anything</div>
+          <div class="chat-subtitle">Students · Faculty · Parents — academic intelligence in one place</div>
+        </div>
+        <div class="chat-controls">
+          <select id="format" class="select-pill">
+            <option value="text">Text</option>
+            <option value="pdf">PDF</option>
+            <option value="excel">Excel</option>
+            <option value="word">Word</option>
+          </select>
+          <button id="clearChatBtn" class="btn-ghost">Clear</button>
+        </div>
+      </div>
+
+      <div class="chat-messages" id="chatMessages">
+        <div class="msg-row ai">
+          <div class="msg-avatar ai">AI</div>
+          <div class="msg-bubble">
+            Hi there! I can answer academic questions, summarise student performance, show mentor and class teacher details, and help faculty assign mentors. How can I help?
           </div>
         </div>
       </div>
-    </section>
 
-    <section class="mt-6 grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)_320px]">
-      <aside class="space-y-6">
-        <div class="rounded-[26px] bg-white p-5 shadow-ambient/30">
-          <h2 class="text-lg font-bold text-nmitInk">Access Panel</h2>
-          <p class="mt-1 text-sm text-slate-600">Use a faculty/admin ID like `FAC001` or a student USN like `1NT23IS015`.</p>
-          <div class="mt-4 space-y-4">
-            <div>
-              <label class="mb-1 block text-sm font-semibold text-slate-700">User ID / USN</label>
-              <input id="userId" type="text" placeholder="FAC001 or 1NT23IS015" class="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none transition focus:border-nmitBlue focus:ring-2 focus:ring-blue-200" />
-            </div>
-            <div class="flex items-center justify-between gap-3 rounded-2xl bg-slate-100 px-4 py-3">
-              <span class="text-sm font-semibold text-slate-600">Detected role</span>
-              <span id="roleBadge" class="rounded-full bg-slate-300 px-3 py-1 text-sm font-bold text-slate-700">Unknown</span>
-            </div>
-          </div>
+      <div class="chat-input-area">
+        <div class="loading-bar" id="loading">
+          <div class="spinner"></div>
+          Working on your request…
         </div>
-
-        <div class="rounded-[26px] bg-white p-5 shadow-ambient/30">
-          <div class="flex items-center justify-between">
-            <h2 class="text-lg font-bold text-nmitInk">Quick Profile</h2>
-            <button id="refreshContextBtn" class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">Refresh</button>
-          </div>
-          <div id="profilePanel" class="mt-4 space-y-3 text-sm text-slate-600">
-            <p>Enter a user ID to load student, mentor, and class teacher information.</p>
-          </div>
+        <div class="chips-row" id="chips"></div>
+        <div class="input-row">
+          <textarea
+            id="query"
+            class="chat-textarea"
+            rows="2"
+            placeholder="Ask about grades, attendance, backlogs, mentors, or academic concepts…"
+          ></textarea>
+          <button id="submitBtn" class="btn-send">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            Send
+          </button>
         </div>
+      </div>
 
-        <div class="rounded-[26px] bg-white p-5 shadow-ambient/30">
-          <h2 class="text-lg font-bold text-nmitInk">Contacts</h2>
-          <div id="contactPanel" class="mt-4 space-y-3 text-sm text-slate-600">
-            <p>Mentor and class teacher contacts will appear here.</p>
-          </div>
+    </div>
+
+    <!-- RIGHT SIDEBAR -->
+    <aside class="sidebar-right">
+
+      <!-- Campus Overview -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Campus Snapshot</span>
         </div>
-      </aside>
-
-      <section class="overflow-hidden rounded-[28px] bg-white shadow-ambient">
-        <div class="border-b border-slate-200 bg-slate-50 px-5 py-4">
-          <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p class="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">WhatsApp-style Academic Chat</p>
-              <h2 class="mt-1 text-2xl font-bold text-nmitInk">Ask the assistant</h2>
+        <div class="card-body">
+          <div class="overview-row">
+            <div class="ov-box">
+              <div class="ov-label">Students</div>
+              <div class="ov-value" id="overviewStudents">—</div>
             </div>
-            <div class="flex flex-wrap items-end gap-3">
-              <div>
-                <label class="mb-1 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Output</label>
-                <select id="format" class="rounded-2xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-nmitBlue focus:ring-2 focus:ring-blue-200">
-                  <option value="text">Text</option>
-                  <option value="pdf">PDF</option>
-                  <option value="excel">Excel</option>
-                  <option value="word">Word</option>
-                </select>
-              </div>
-              <button id="clearChatBtn" class="rounded-2xl bg-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-300">Clear Chat</button>
+            <div class="ov-box light">
+              <div class="ov-label">Courses</div>
+              <div class="ov-value" id="overviewCourses">—</div>
             </div>
           </div>
         </div>
+      </div>
 
-        <div id="chatMessages" class="h-[560px] overflow-y-auto bg-[linear-gradient(180deg,#f8fafc,#eef2ff)] px-4 py-5 md:px-6">
-          <div class="flex justify-start">
-            <div class="max-w-[85%] rounded-[24px] rounded-tl-md bg-white px-4 py-3 text-sm leading-7 text-slate-700 shadow">
-              Hi. I can answer general questions, summarize student data, show class teacher and mentor details, and help faculty assign mentors.
-            </div>
-          </div>
+      <!-- Suggested Prompts -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Try asking</span>
         </div>
-
-        <div class="border-t border-slate-200 bg-white px-4 py-4 md:px-6">
-          <div id="loading" class="hidden items-center gap-3 rounded-2xl bg-blue-50 px-4 py-3 text-sm font-medium text-blue-900">
-            <div class="h-4 w-4 animate-spin rounded-full border-2 border-blue-900 border-t-transparent"></div>
-            Working on your request...
-          </div>
-          <div class="mt-4">
-            <label class="mb-2 block text-sm font-semibold text-slate-700">Message</label>
-            <textarea id="query" rows="4" placeholder="Ask about grades, mentor details, class teacher info, attendance, backlogs, or general concepts..." class="w-full rounded-[22px] border border-slate-300 px-4 py-3 outline-none transition focus:border-nmitBlue focus:ring-2 focus:ring-blue-200"></textarea>
-          </div>
-          <div class="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div id="chips" class="flex flex-wrap gap-2"></div>
-            <button id="submitBtn" class="rounded-[20px] bg-nmitBlue px-6 py-3 text-sm font-semibold text-white hover:bg-blue-900">Send Message</button>
-          </div>
+        <div class="card-body">
+          <div class="prompt-list" id="promptPanel"></div>
         </div>
-      </section>
+      </div>
 
-      <aside class="space-y-6">
-        <div class="rounded-[26px] bg-white p-5 shadow-ambient/30">
-          <h2 class="text-lg font-bold text-nmitInk">Campus Snapshot</h2>
-          <div id="overviewPanel" class="mt-4 grid grid-cols-2 gap-3 text-sm">
-            <div class="rounded-2xl bg-slate-100 p-4">
-              <p class="text-slate-500">Students</p>
-              <p id="overviewStudents" class="mt-2 text-2xl font-bold text-nmitInk">-</p>
-            </div>
-            <div class="rounded-2xl bg-slate-100 p-4">
-              <p class="text-slate-500">Courses</p>
-              <p id="overviewCourses" class="mt-2 text-2xl font-bold text-nmitInk">-</p>
-            </div>
-          </div>
+      <!-- Assign Mentor (Faculty/Admin only) -->
+      <div class="card" id="mentorAssignCard">
+        <div class="card-header">
+          <span class="card-title">Assign Mentor</span>
         </div>
-
-        <div class="rounded-[26px] bg-white p-5 shadow-ambient/30">
-          <h2 class="text-lg font-bold text-nmitInk">Suggested Prompts</h2>
-          <div id="promptPanel" class="mt-4 flex flex-wrap gap-2"></div>
-        </div>
-
-        <div id="mentorAssignCard" class="hidden rounded-[26px] bg-white p-5 shadow-ambient/30">
-          <h2 class="text-lg font-bold text-nmitInk">Assign Mentor</h2>
-          <p class="mt-1 text-sm text-slate-600">Visible for faculty and admin users.</p>
-          <div class="mt-4 space-y-3">
-            <input id="mentorStudentId" type="text" placeholder="Student USN" class="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-nmitBlue focus:ring-2 focus:ring-blue-200" />
-            <input id="mentorName" list="mentorDirectory" type="text" placeholder="Mentor name" class="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-nmitBlue focus:ring-2 focus:ring-blue-200" />
-            <input id="mentorEmail" type="email" placeholder="Mentor email" class="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-nmitBlue focus:ring-2 focus:ring-blue-200" />
-            <input id="mentorPhone" type="text" placeholder="Mentor phone" class="w-full rounded-2xl border border-slate-300 px-4 py-3 outline-none focus:border-nmitBlue focus:ring-2 focus:ring-blue-200" />
-            <button id="assignMentorBtn" class="w-full rounded-2xl bg-nmitYellow px-4 py-3 font-semibold text-nmitInk hover:bg-yellow-400">Update Mentor</button>
+        <div class="card-body">
+          <p class="profile-empty" style="margin-bottom:12px">Faculty & admin access only.</p>
+          <div class="field-group">
+            <input id="mentorStudentId" class="field-input" type="text" placeholder="Student USN" />
+            <input id="mentorName" class="field-input" list="mentorDirectory" type="text" placeholder="Mentor name" />
+            <input id="mentorEmail" class="field-input" type="email" placeholder="Mentor email" />
+            <input id="mentorPhone" class="field-input" type="text" placeholder="Mentor phone" />
+            <button id="assignMentorBtn" class="btn-gold">Update Mentor</button>
           </div>
-          <p id="mentorAssignStatus" class="mt-3 text-sm text-slate-600"></p>
+          <p id="mentorAssignStatus" class="status-text"></p>
           <datalist id="mentorDirectory"></datalist>
         </div>
-      </aside>
-    </section>
-  </main>
+      </div>
 
-  <script>
-    const examples = [
-      "Show my student profile",
-      "Who is my class teacher?",
-      "Who is my mentor and how can I contact them?",
-      "How many students are in Machine Learning?",
-      "Show attendance report for Cloud Computing",
-      "List backlog students",
-      "Explain neural networks"
-    ];
+    </aside>
 
-    const userIdInput = document.getElementById("userId");
-    const roleBadge = document.getElementById("roleBadge");
-    const queryInput = document.getElementById("query");
-    const formatSelect = document.getElementById("format");
-    const submitBtn = document.getElementById("submitBtn");
-    const loading = document.getElementById("loading");
-    const chatMessages = document.getElementById("chatMessages");
-    const chipsContainer = document.getElementById("chips");
-    const promptPanel = document.getElementById("promptPanel");
-    const profilePanel = document.getElementById("profilePanel");
-    const contactPanel = document.getElementById("contactPanel");
-    const overviewStudents = document.getElementById("overviewStudents");
-    const overviewCourses = document.getElementById("overviewCourses");
-    const mentorAssignCard = document.getElementById("mentorAssignCard");
-    const mentorDirectory = document.getElementById("mentorDirectory");
-    const mentorStudentId = document.getElementById("mentorStudentId");
-    const mentorName = document.getElementById("mentorName");
-    const mentorEmail = document.getElementById("mentorEmail");
-    const mentorPhone = document.getElementById("mentorPhone");
-    const mentorAssignStatus = document.getElementById("mentorAssignStatus");
-    const assignMentorBtn = document.getElementById("assignMentorBtn");
-    const refreshContextBtn = document.getElementById("refreshContextBtn");
-    const clearChatBtn = document.getElementById("clearChatBtn");
+  </div>
+</div>
 
-    function detectRole(userId) {
-      const value = (userId || "").trim().toUpperCase();
-      if (value.startsWith("ADM")) return "Admin";
-      if (value.startsWith("FAC")) return "Faculty";
-      if (value.startsWith("STU")) return "Student";
-      if (/^\d[A-Z0-9]{6,}$/.test(value)) return "Student";
-      return "Unknown";
-    }
+<script>
+  const EXAMPLES = [
+    "Show my student profile",
+    "Who is my class teacher?",
+    "Who is my mentor?",
+    "Attendance report – Cloud Computing",
+    "List backlog students",
+    "Explain neural networks",
+    "How many students in ML?"
+  ];
 
-    function updateRoleBadge() {
-      const role = detectRole(userIdInput.value);
-      roleBadge.textContent = role;
-      roleBadge.className = "rounded-full px-3 py-1 text-sm font-bold";
-      if (role === "Student") roleBadge.classList.add("bg-blue-100", "text-blue-800");
-      else if (role === "Faculty") roleBadge.classList.add("bg-emerald-100", "text-emerald-800");
-      else if (role === "Admin") roleBadge.classList.add("bg-amber-100", "text-amber-800");
-      else roleBadge.classList.add("bg-slate-300", "text-slate-700");
-    }
+  /* ── DOM refs ── */
+  const userIdInput        = document.getElementById("userId");
+  const roleBadge          = document.getElementById("roleBadge");
+  const queryInput         = document.getElementById("query");
+  const formatSelect       = document.getElementById("format");
+  const submitBtn          = document.getElementById("submitBtn");
+  const loadingEl          = document.getElementById("loading");
+  const chatMessages       = document.getElementById("chatMessages");
+  const chipsContainer     = document.getElementById("chips");
+  const promptPanel        = document.getElementById("promptPanel");
+  const profilePanel       = document.getElementById("profilePanel");
+  const contactPanel       = document.getElementById("contactPanel");
+  const overviewStudents   = document.getElementById("overviewStudents");
+  const overviewCourses    = document.getElementById("overviewCourses");
+  const mentorAssignCard   = document.getElementById("mentorAssignCard");
+  const mentorDirectory    = document.getElementById("mentorDirectory");
+  const mentorStudentId    = document.getElementById("mentorStudentId");
+  const mentorName         = document.getElementById("mentorName");
+  const mentorEmail        = document.getElementById("mentorEmail");
+  const mentorPhone        = document.getElementById("mentorPhone");
+  const mentorAssignStatus = document.getElementById("mentorAssignStatus");
+  const assignMentorBtn    = document.getElementById("assignMentorBtn");
+  const refreshContextBtn  = document.getElementById("refreshContextBtn");
+  const clearChatBtn       = document.getElementById("clearChatBtn");
 
-    function createPromptChip(text, container) {
+  /* ── Helpers ── */
+  function esc(v) {
+    return String(v ?? "")
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }
+
+  function detectRole(id) {
+    const v = (id || "").trim().toUpperCase();
+    if (v.startsWith("ADM")) return "Admin";
+    if (v.startsWith("FAC")) return "Faculty";
+    if (/^\d[A-Z0-9]{6,}$/.test(v)) return "Student";
+    if (v.startsWith("STU")) return "Student";
+    return "Unknown";
+  }
+
+  function updateRoleBadge() {
+    const role = detectRole(userIdInput.value);
+    roleBadge.textContent = role;
+    roleBadge.className = "role-pill " + role.toLowerCase();
+  }
+
+  /* ── Chips & prompts ── */
+  function buildPrompts() {
+    chipsContainer.innerHTML = "";
+    promptPanel.innerHTML = "";
+
+    EXAMPLES.forEach((text) => {
+      // chips in input area
       const chip = document.createElement("button");
       chip.type = "button";
-      chip.className = "rounded-full border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-nmitBlue hover:text-nmitBlue";
+      chip.className = "chip";
       chip.textContent = text;
-      chip.addEventListener("click", () => {
-        queryInput.value = text;
-        queryInput.focus();
-      });
-      container.appendChild(chip);
-    }
+      chip.addEventListener("click", () => { queryInput.value = text; queryInput.focus(); });
+      chipsContainer.appendChild(chip);
 
-    function buildPrompts() {
-      chipsContainer.innerHTML = "";
-      promptPanel.innerHTML = "";
-      examples.forEach((text) => {
-        createPromptChip(text, chipsContainer);
-        createPromptChip(text, promptPanel);
-      });
-    }
-
-    function setLoading(isLoading) {
-      loading.classList.toggle("hidden", !isLoading);
-      loading.classList.toggle("flex", isLoading);
-      submitBtn.disabled = isLoading;
-      submitBtn.classList.toggle("opacity-60", isLoading);
-      submitBtn.classList.toggle("cursor-not-allowed", isLoading);
-    }
-
-    function escapeHtml(value) {
-      return String(value ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
-    }
-
-    function appendMessage(content, kind = "assistant", html = false) {
-      const wrapper = document.createElement("div");
-      wrapper.className = `flex ${kind === "user" ? "justify-end" : "justify-start"} mb-4`;
-
-      const bubble = document.createElement("div");
-      bubble.className = kind === "user"
-        ? "max-w-[85%] rounded-[24px] rounded-br-md bg-nmitBlue px-4 py-3 text-sm leading-7 text-white shadow"
-        : "max-w-[85%] rounded-[24px] rounded-tl-md bg-white px-4 py-3 text-sm leading-7 text-slate-700 shadow";
-
-      if (html) bubble.innerHTML = content;
-      else bubble.textContent = content;
-
-      wrapper.appendChild(bubble);
-      chatMessages.appendChild(wrapper);
-      chatMessages.scrollTop = chatMessages.scrollHeight;
-    }
-
-    function renderProfile(profile) {
-      if (!profile) {
-        profilePanel.innerHTML = "<p>Enter a valid student USN to view profile details.</p>";
-        contactPanel.innerHTML = "<p>Mentor and class teacher contacts will appear here.</p>";
-        return;
-      }
-
-      profilePanel.innerHTML = `
-        <div class="rounded-2xl bg-slate-100 p-4">
-          <p class="text-xs uppercase tracking-[0.18em] text-slate-500">${escapeHtml(profile.student_id)}</p>
-          <p class="mt-2 text-lg font-bold text-nmitInk">${escapeHtml(profile.name)}</p>
-          <p class="mt-1">${escapeHtml(profile.department)} • Sem ${escapeHtml(profile.semester)} • Sec ${escapeHtml(profile.section)}</p>
-          <div class="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <div class="rounded-xl bg-white p-3"><span class="text-slate-500">CGPA</span><p class="mt-1 text-base font-bold text-nmitInk">${escapeHtml(profile.cgpa)}</p></div>
-            <div class="rounded-xl bg-white p-3"><span class="text-slate-500">Attendance</span><p class="mt-1 text-base font-bold text-nmitInk">${escapeHtml(profile.attendance_percent)}%</p></div>
-            <div class="rounded-xl bg-white p-3"><span class="text-slate-500">Course</span><p class="mt-1 text-base font-bold text-nmitInk">${escapeHtml(profile.course)}</p></div>
-            <div class="rounded-xl bg-white p-3"><span class="text-slate-500">Backlogs</span><p class="mt-1 text-base font-bold text-nmitInk">${escapeHtml(profile.backlog_count)}</p></div>
-          </div>
-        </div>
-      `;
-
-      contactPanel.innerHTML = `
-        <div class="rounded-2xl bg-slate-100 p-4">
-          <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Mentor</p>
-          <p class="mt-2 text-base font-bold text-nmitInk">${escapeHtml(profile.mentor.name)}</p>
-          <p class="mt-1">${escapeHtml(profile.mentor.email)}</p>
-          <p>${escapeHtml(profile.mentor.phone)}</p>
-        </div>
-        <div class="rounded-2xl bg-slate-100 p-4">
-          <p class="text-xs uppercase tracking-[0.18em] text-slate-500">Class Teacher</p>
-          <p class="mt-2 text-base font-bold text-nmitInk">${escapeHtml(profile.class_teacher.name)}</p>
-          <p class="mt-1">${escapeHtml(profile.class_teacher.email)}</p>
-          <p>${escapeHtml(profile.class_teacher.phone)}</p>
-        </div>
-      `;
-    }
-
-    function renderContext(data) {
-      overviewStudents.textContent = data.overview?.students ?? "-";
-      overviewCourses.textContent = data.overview?.courses?.length ?? "-";
-      renderProfile(data.profile);
-
-      mentorAssignCard.classList.toggle("hidden", !data.permissions?.can_assign_mentor);
-      mentorDirectory.innerHTML = "";
-      (data.mentor_directory || []).forEach((mentor) => {
-        const option = document.createElement("option");
-        option.value = mentor.name;
-        mentorDirectory.appendChild(option);
-      });
-    }
-
-    async function loadContext() {
-      const userId = userIdInput.value.trim();
-      updateRoleBadge();
-      if (!userId) {
-        renderContext({ overview: {}, permissions: {}, profile: null, mentor_directory: [] });
-        return;
-      }
-
-      try {
-        const res = await fetch(`/user-context/${encodeURIComponent(userId)}`);
-        if (!res.ok) throw new Error("Unable to load user context");
-        const data = await res.json();
-        renderContext(data);
-      } catch (error) {
-        profilePanel.innerHTML = `<p>${escapeHtml(error.message)}</p>`;
-      }
-    }
-
-    async function submitQuery() {
-      const user_id = userIdInput.value.trim();
-      const query = queryInput.value.trim();
-      const format = formatSelect.value;
-
-      if (!user_id || !query) {
-        alert("Please provide both User ID and a message.");
-        return;
-      }
-
-      appendMessage(query, "user");
-      queryInput.value = "";
-      setLoading(true);
-
-      try {
-        const res = await fetch("/ask", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_id, query, format })
-        });
-
-        if (!res.ok) {
-          const errorPayload = await res.json().catch(() => ({}));
-          throw new Error(errorPayload.detail || "Request failed.");
-        }
-
-        if (format === "text") {
-          const data = await res.json();
-          appendMessage(data.answer || "No response returned.");
-          if (data.user_context) renderContext(data.user_context);
-        } else {
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          const extension = format === "pdf" ? "pdf" : format === "excel" ? "xlsx" : "docx";
-          appendMessage(
-            `<p class="font-semibold text-nmitInk">Your ${extension.toUpperCase()} file is ready.</p>
-             <a class="mt-3 inline-flex rounded-xl bg-nmitBlue px-4 py-2 font-semibold text-white" href="${url}" download="moodle_ai_response.${extension}">Download file</a>`,
-            "assistant",
-            true
-          );
-        }
-      } catch (error) {
-        appendMessage(`Error: ${error.message}`);
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    async function handleMentorAssignment() {
-      const actor_user_id = userIdInput.value.trim();
-      const student_id = mentorStudentId.value.trim();
-      const mentor_name = mentorName.value.trim();
-      const mentor_email = mentorEmail.value.trim();
-      const mentor_phone = mentorPhone.value.trim();
-
-      if (!actor_user_id || !student_id || !mentor_name) {
-        mentorAssignStatus.textContent = "Fill actor user ID, student USN, and mentor name.";
-        return;
-      }
-
-      mentorAssignStatus.textContent = "Updating mentor assignment...";
-      try {
-        const res = await fetch("/mentor/assign", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ actor_user_id, student_id, mentor_name, mentor_email, mentor_phone })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || "Mentor assignment failed.");
-        mentorAssignStatus.textContent = data.message;
-        appendMessage(`Mentor updated for ${student_id}. ${mentor_name} is now assigned.`, "assistant");
-        await loadContext();
-      } catch (error) {
-        mentorAssignStatus.textContent = error.message;
-      }
-    }
-
-    userIdInput.addEventListener("input", loadContext);
-    refreshContextBtn.addEventListener("click", loadContext);
-    submitBtn.addEventListener("click", submitQuery);
-    assignMentorBtn.addEventListener("click", handleMentorAssignment);
-    clearChatBtn.addEventListener("click", () => {
-      chatMessages.innerHTML = "";
-      appendMessage("Hi. I can answer general questions, summarize student data, show class teacher and mentor details, and help faculty assign mentors.");
+      // prompt list
+      const item = document.createElement("div");
+      item.className = "prompt-item";
+      item.textContent = text;
+      item.addEventListener("click", () => { queryInput.value = text; queryInput.focus(); });
+      promptPanel.appendChild(item);
     });
-    queryInput.addEventListener("keydown", (event) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-        submitQuery();
-      }
-    });
+  }
 
-    buildPrompts();
+  /* ── Chat ── */
+  function appendMessage(content, kind = "assistant", html = false) {
+    const row = document.createElement("div");
+    row.className = `msg-row ${kind === "user" ? "user" : "ai"}`;
+
+    const avatar = document.createElement("div");
+    avatar.className = `msg-avatar ${kind === "user" ? "user" : "ai"}`;
+    avatar.textContent = kind === "user" ? "U" : "AI";
+
+    const bubble = document.createElement("div");
+    bubble.className = "msg-bubble";
+    if (html) bubble.innerHTML = content;
+    else bubble.textContent = content;
+
+    row.appendChild(avatar);
+    row.appendChild(bubble);
+    chatMessages.appendChild(row);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  /* ── Profile rendering ── */
+  function renderProfile(profile) {
+    if (!profile) {
+      profilePanel.innerHTML = '<p class="profile-empty">Enter a valid student USN to view profile details.</p>';
+      contactPanel.innerHTML = '<p class="profile-empty">Mentor and class teacher details will appear here.</p>';
+      return;
+    }
+
+    const attNum = parseFloat(profile.attendance_percent) || 0;
+    const attClass = attNum >= 75 ? "good" : attNum >= 60 ? "warn" : "bad";
+    const cgpaNum = parseFloat(profile.cgpa) || 0;
+    const cgpaClass = cgpaNum >= 7 ? "good" : cgpaNum >= 5.5 ? "warn" : "bad";
+    const blClass = (profile.backlog_count > 0) ? "bad" : "good";
+
+    profilePanel.innerHTML = `
+      <div class="profile-name">${esc(profile.name)}</div>
+      <div class="profile-meta">${esc(profile.department)} · Sem ${esc(profile.semester)} · Sec ${esc(profile.section)}</div>
+      <div class="stat-grid">
+        <div class="stat-box ${cgpaClass}">
+          <div class="stat-label">CGPA</div>
+          <div class="stat-value">${esc(profile.cgpa)}</div>
+        </div>
+        <div class="stat-box ${attClass}">
+          <div class="stat-label">Attendance</div>
+          <div class="stat-value">${esc(profile.attendance_percent)}%</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Course</div>
+          <div class="stat-value" style="font-size:13px;letter-spacing:0">${esc(profile.course)}</div>
+        </div>
+        <div class="stat-box ${blClass}">
+          <div class="stat-label">Backlogs</div>
+          <div class="stat-value">${esc(profile.backlog_count)}</div>
+        </div>
+      </div>
+    `;
+
+    contactPanel.innerHTML = `
+      <div class="contact-block">
+        <div class="contact-role">Mentor</div>
+        <div class="contact-name">${esc(profile.mentor.name)}</div>
+        <div class="contact-info">${esc(profile.mentor.email)}<br>${esc(profile.mentor.phone)}</div>
+      </div>
+      <div class="contact-block">
+        <div class="contact-role">Class Teacher</div>
+        <div class="contact-name">${esc(profile.class_teacher.name)}</div>
+        <div class="contact-info">${esc(profile.class_teacher.email)}<br>${esc(profile.class_teacher.phone)}</div>
+      </div>
+    `;
+  }
+
+  function renderContext(data) {
+    overviewStudents.textContent = data.overview?.students ?? "—";
+    overviewCourses.textContent  = data.overview?.courses?.length ?? "—";
+    renderProfile(data.profile);
+
+    if (data.permissions?.can_assign_mentor) {
+      mentorAssignCard.classList.add("visible");
+    } else {
+      mentorAssignCard.classList.remove("visible");
+    }
+
+    mentorDirectory.innerHTML = "";
+    (data.mentor_directory || []).forEach((mentor) => {
+      const opt = document.createElement("option");
+      opt.value = mentor.name;
+      mentorDirectory.appendChild(opt);
+    });
+  }
+
+  /* ── Load context ── */
+  async function loadContext() {
+    const userId = userIdInput.value.trim();
     updateRoleBadge();
-    loadContext();
-  </script>
+    if (!userId) {
+      renderContext({ overview: {}, permissions: {}, profile: null, mentor_directory: [] });
+      return;
+    }
+    try {
+      const res = await fetch(`/user-context/${encodeURIComponent(userId)}`);
+      if (!res.ok) throw new Error("Unable to load user context");
+      const data = await res.json();
+      renderContext(data);
+    } catch (err) {
+      profilePanel.innerHTML = `<p class="profile-empty">${esc(err.message)}</p>`;
+    }
+  }
+
+  /* ── Submit ── */
+  async function submitQuery() {
+    const user_id = userIdInput.value.trim();
+    const query   = queryInput.value.trim();
+    const format  = formatSelect.value;
+
+    if (!user_id || !query) { alert("Please enter a User ID and a message."); return; }
+
+    appendMessage(query, "user");
+    queryInput.value = "";
+    setLoading(true);
+
+    try {
+      const res = await fetch("/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id, query, format })
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Request failed.");
+      }
+
+      if (format === "text") {
+        const data = await res.json();
+        appendMessage(data.answer || "No response returned.");
+        if (data.user_context) renderContext(data.user_context);
+      } else {
+        const blob = await res.blob();
+        const url  = URL.createObjectURL(blob);
+        const ext  = format === "pdf" ? "pdf" : format === "excel" ? "xlsx" : "docx";
+        appendMessage(
+          `<p style="font-weight:600;margin-bottom:4px">Your ${ext.toUpperCase()} is ready.</p>
+           <a class="download-link" href="${url}" download="moodle_ai_response.${ext}">
+             ↓ Download file
+           </a>`,
+          "assistant", true
+        );
+      }
+    } catch (err) {
+      appendMessage(`Error: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function setLoading(on) {
+    loadingEl.classList.toggle("active", on);
+    submitBtn.disabled = on;
+  }
+
+  /* ── Mentor assign ── */
+  async function handleMentorAssignment() {
+    const actor_user_id = userIdInput.value.trim();
+    const student_id    = mentorStudentId.value.trim();
+    const mentor_name   = mentorName.value.trim();
+    const mentor_email  = mentorEmail.value.trim();
+    const mentor_phone  = mentorPhone.value.trim();
+
+    if (!actor_user_id || !student_id || !mentor_name) {
+      mentorAssignStatus.textContent = "Please fill in the actor ID, student USN, and mentor name.";
+      return;
+    }
+
+    mentorAssignStatus.textContent = "Updating…";
+    try {
+      const res  = await fetch("/mentor/assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actor_user_id, student_id, mentor_name, mentor_email, mentor_phone })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Assignment failed.");
+      mentorAssignStatus.textContent = data.message;
+      appendMessage(`Mentor updated for ${student_id} — ${mentor_name} is now assigned.`, "assistant");
+      await loadContext();
+    } catch (err) {
+      mentorAssignStatus.textContent = err.message;
+    }
+  }
+
+  /* ── Event listeners ── */
+  userIdInput.addEventListener("input", loadContext);
+  refreshContextBtn.addEventListener("click", loadContext);
+  submitBtn.addEventListener("click", submitQuery);
+  assignMentorBtn.addEventListener("click", handleMentorAssignment);
+
+  clearChatBtn.addEventListener("click", () => {
+    chatMessages.innerHTML = "";
+    appendMessage("Hi there! I can answer academic questions, summarise student performance, show mentor and class teacher details, and help faculty assign mentors. How can I help?");
+  });
+
+  queryInput.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submitQuery();
+  });
+
+  /* ── Init ── */
+  buildPrompts();
+  updateRoleBadge();
+  loadContext();
+</script>
 </body>
 </html>

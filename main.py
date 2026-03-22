@@ -16,7 +16,7 @@ from starlette.background import BackgroundTask
 
 from classifier import classify_query
 from data_retriever import assign_mentor, get_user_context, retrieve_data
-from rbac import detect_role
+from rbac import resolve_identity, check_permission, action_for_intent
 from response_formatter import (
     create_excel,
     create_pdf,
@@ -87,13 +87,12 @@ async def ask_groq(system_prompt: str, user_prompt: str, model: str) -> str:
 
 def _compact_retrieval_payload(retrieved: dict) -> dict:
     records = retrieved.get("records", [])
-    sample_records = records[:12]
     return {
-        "intent": retrieved.get("intent"),
-        "entity": retrieved.get("entity"),
-        "summary": retrieved.get("summary", {}),
-        "record_count": len(records),
-        "sample_records": sample_records,
+        "intent":        retrieved.get("intent"),
+        "entity":        retrieved.get("entity"),
+        "summary":       retrieved.get("summary", {}),
+        "record_count":  len(records),
+        "sample_records":records[:12],
     }
 
 
@@ -117,12 +116,13 @@ async def health() -> dict:
 
 @app.get("/user-context/{user_id}")
 async def user_context(user_id: str):
-    role = detect_role(user_id)
+    identity = resolve_identity(user_id)
     context = get_user_context(
         data_path=str(DATA_PATH),
         user_id=user_id,
-        role=role,
+        role=identity.role,
         assignments_path=str(MENTOR_ASSIGNMENTS_PATH),
+        identity=identity,
     )
     return JSONResponse(context)
 
@@ -136,18 +136,19 @@ async def home():
 @app.post("/mentor/assign")
 async def mentor_assignment(payload: MentorAssignmentRequest):
     try:
-        actor_role = detect_role(payload.actor_user_id)
+        identity = resolve_identity(payload.actor_user_id)
         result = assign_mentor(
             data_path=str(DATA_PATH),
             assignments_path=str(MENTOR_ASSIGNMENTS_PATH),
-            actor_role=actor_role,
+            actor_role=identity.role,
             actor_user_id=payload.actor_user_id,
             student_id=payload.student_id,
             mentor_name=payload.mentor_name,
             mentor_email=payload.mentor_email,
             mentor_phone=payload.mentor_phone,
+            identity=identity,
         )
-        return JSONResponse({"role": actor_role, **result})
+        return JSONResponse({"role": identity.role, **result})
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
     except ValueError as exc:
@@ -157,13 +158,20 @@ async def mentor_assignment(payload: MentorAssignmentRequest):
 @app.post("/ask")
 async def ask(payload: AskRequest):
     try:
-        role = detect_role(payload.user_id)
+        # ── Resolve full identity once; reuse everywhere ──────────────────
+        identity = resolve_identity(payload.user_id)
+        role = identity.role
+
         classification = await classify_query(payload.query)
-        logger.info("Classification result: %s", json.dumps(classification))
+        logger.info("Classification: %s | Identity: %s", json.dumps(classification), identity)
 
         query_type = classification.get("query_type", "general_query")
-        intent = classification.get("intent", "general")
-        entity = classification.get("entity", "general")
+        intent     = classification.get("intent", "general")
+        entity     = classification.get("entity", "general")
+
+        # ── RBAC gate: check intent-level permission before any data fetch ─
+        required_action = action_for_intent(intent)
+        check_permission(identity, required_action)
 
         if query_type == "organizational_query":
             retrieved = retrieve_data(
@@ -173,8 +181,10 @@ async def ask(payload: AskRequest):
                 role=role,
                 user_id=payload.user_id,
                 assignments_path=str(MENTOR_ASSIGNMENTS_PATH),
+                identity=identity,          # pass resolved identity through
             )
             compact_payload = _compact_retrieval_payload(retrieved)
+
             system_prompt = (
                 "You are Moodle AI Assistant for NMIT. "
                 "Use the provided academic dataset and role context to answer clearly. "
@@ -194,7 +204,9 @@ async def ask(payload: AskRequest):
                 "Generate a clean natural language response."
             )
             answer = await ask_groq(system_prompt, user_prompt, "llama-3.3-70b-versatile")
+
         else:
+            # General (non-organisational) query — no data retrieval needed
             system_prompt = (
                 "You are a helpful educational assistant. "
                 "Answer in a clean, easy-to-read format."
@@ -202,54 +214,49 @@ async def ask(payload: AskRequest):
             user_prompt = f"User role: {role}\nQuestion: {payload.query}"
             answer = await ask_groq(system_prompt, user_prompt, "llama-3.3-70b-versatile")
 
+        # ── Format and return ──────────────────────────────────────────────
         if payload.format == "text":
             return JSONResponse(
                 {
-                    "answer": format_text_response(answer),
-                    "role": role,
+                    "answer":       format_text_response(answer),
+                    "role":         role,
                     "classification": classification,
                     "user_context": get_user_context(
                         data_path=str(DATA_PATH),
                         user_id=payload.user_id,
                         role=role,
                         assignments_path=str(MENTOR_ASSIGNMENTS_PATH),
+                        identity=identity,
                     ),
                 }
             )
 
         if payload.format == "txt":
             file_path = create_text_file(answer)
-            return _build_download_response(
-                file_path=file_path,
-                media_type="text/plain; charset=utf-8",
-                filename="moodle_ai_response.txt",
-            )
+            return _build_download_response(file_path, "text/plain; charset=utf-8", "moodle_ai_response.txt")
 
         if payload.format == "pdf":
             file_path = create_pdf(answer)
-            return _build_download_response(
-                file_path=file_path,
-                media_type="application/pdf",
-                filename="moodle_ai_response.pdf",
-            )
+            return _build_download_response(file_path, "application/pdf", "moodle_ai_response.pdf")
 
         if payload.format == "excel":
             file_path = create_excel(answer)
             return _build_download_response(
-                file_path=file_path,
-                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                filename="moodle_ai_response.xlsx",
+                file_path,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "moodle_ai_response.xlsx",
             )
 
         if payload.format == "word":
             file_path = create_word(answer)
             return _build_download_response(
-                file_path=file_path,
-                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                filename="moodle_ai_response.docx",
+                file_path,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "moodle_ai_response.docx",
             )
 
         raise HTTPException(status_code=400, detail="Invalid format")
+
     except HTTPException:
         raise
     except PermissionError as exc:

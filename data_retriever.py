@@ -5,6 +5,8 @@ from typing import Any, Dict
 
 import pandas as pd
 
+# Import the full RBAC layer
+from rbac import RoleIdentity, check_permission, faculty_scope, student_scope
 
 GRADE_MAP = {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0, "F": 0.0}
 CORE_COLUMNS = {
@@ -49,6 +51,8 @@ FACULTY_DIRECTORY = [
 ]
 
 
+# ── I/O helpers ───────────────────────────────────────────────────────────────
+
 def _read_table(data_path: str) -> pd.DataFrame:
     path = Path(data_path)
     if path.suffix.lower() in {".xlsx", ".xls"}:
@@ -72,23 +76,11 @@ def _load_student_frame(data_path: str) -> pd.DataFrame:
             df[column] = default
 
     string_columns = [
-        "student_id",
-        "name",
-        "course",
-        "faculty",
-        "section",
-        "department",
-        "class_teacher_name",
-        "class_teacher_email",
-        "class_teacher_phone",
-        "mentor_name",
-        "mentor_email",
-        "mentor_phone",
-        "phone",
-        "college_email",
-        "personal_email",
-        "area_of_interest",
-        "backlog_subjects",
+        "student_id", "name", "course", "faculty", "section", "department",
+        "class_teacher_name", "class_teacher_email", "class_teacher_phone",
+        "mentor_name", "mentor_email", "mentor_phone",
+        "phone", "college_email", "personal_email",
+        "area_of_interest", "backlog_subjects",
     ]
     for column in string_columns:
         df[column] = df[column].fillna("").astype(str).str.strip()
@@ -118,16 +110,14 @@ def _save_mentor_overrides(assignments_path: str, overrides: Dict[str, Dict[str,
 def _apply_mentor_overrides(df: pd.DataFrame, assignments_path: str | None) -> pd.DataFrame:
     if not assignments_path:
         return df
-
     overrides = _load_mentor_overrides(assignments_path)
     if not overrides:
         return df
-
     updated = df.copy()
     for student_id, mentor in overrides.items():
         mask = updated["student_id"] == student_id.upper()
         if mask.any():
-            updated.loc[mask, "mentor_name"] = mentor.get("mentor_name", "")
+            updated.loc[mask, "mentor_name"]  = mentor.get("mentor_name", "")
             updated.loc[mask, "mentor_email"] = mentor.get("mentor_email", "")
             updated.loc[mask, "mentor_phone"] = mentor.get("mentor_phone", "")
     return updated
@@ -145,12 +135,10 @@ def _extract_student_id(user_id: str | None) -> str | None:
 def _find_student_row(df: pd.DataFrame, token: str | None) -> pd.Series | None:
     if not token or token == "GENERAL":
         return None
-
     normalized = token.strip().upper()
     direct = df[df["student_id"] == normalized]
     if not direct.empty:
         return direct.iloc[0]
-
     by_name = df[df["name"].str.upper().str.contains(normalized, na=False)]
     if not by_name.empty:
         return by_name.iloc[0]
@@ -169,29 +157,29 @@ def _find_course(df: pd.DataFrame, token: str | None) -> str | None:
 
 def _record_to_profile(record: pd.Series) -> Dict[str, Any]:
     return {
-        "student_id": record["student_id"],
-        "name": record["name"],
-        "department": record["department"],
-        "semester": int(record["semester"]) if pd.notna(record["semester"]) else None,
-        "section": record["section"],
-        "course": record["course"],
-        "grade": record["grade"],
+        "student_id":       record["student_id"],
+        "name":             record["name"],
+        "department":       record["department"],
+        "semester":         int(record["semester"]) if pd.notna(record["semester"]) else None,
+        "section":          record["section"],
+        "course":           record["course"],
+        "grade":            record["grade"],
         "attendance_percent": float(record["attendance_percent"]),
-        "cgpa": float(record["cgpa"]),
-        "aggregate_percent": float(record["aggregate_percent"]),
-        "backlog_count": int(record["backlog_count"]),
+        "cgpa":             float(record["cgpa"]),
+        "aggregate_percent":float(record["aggregate_percent"]),
+        "backlog_count":    int(record["backlog_count"]),
         "backlog_subjects": record["backlog_subjects"],
         "area_of_interest": record["area_of_interest"],
-        "phone": record["phone"],
-        "college_email": record["college_email"],
-        "personal_email": record["personal_email"],
+        "phone":            record["phone"],
+        "college_email":    record["college_email"],
+        "personal_email":   record["personal_email"],
         "class_teacher": {
-            "name": record["class_teacher_name"],
+            "name":  record["class_teacher_name"],
             "email": record["class_teacher_email"],
             "phone": record["class_teacher_phone"],
         },
         "mentor": {
-            "name": record["mentor_name"],
+            "name":  record["mentor_name"],
             "email": record["mentor_email"],
             "phone": record["mentor_phone"],
         },
@@ -201,33 +189,77 @@ def _record_to_profile(record: pd.Series) -> Dict[str, Any]:
     }
 
 
+# ── RBAC-aware data access ────────────────────────────────────────────────────
+
+def _scoped_frame(df: pd.DataFrame, identity: RoleIdentity) -> pd.DataFrame:
+    """
+    Return the subset of df the identity is allowed to see.
+
+      admin   → full frame
+      faculty → rows where they are the course instructor or class teacher
+      student → only their own row
+      unknown → empty frame
+    """
+    if identity.role == "admin":
+        return df
+    if identity.role == "faculty":
+        return faculty_scope(identity, df)
+    if identity.role == "student":
+        return student_scope(identity, df)
+    # unknown
+    return df.iloc[0:0]
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
+
 def get_user_context(
     data_path: str,
     user_id: str,
     role: str,
     assignments_path: str | None = None,
+    identity: RoleIdentity | None = None,
 ) -> Dict[str, Any]:
-    df = _apply_mentor_overrides(_load_student_frame(data_path), assignments_path)
-    student_token = _extract_student_id(user_id)
-    record = _find_student_row(df, student_token)
+    """
+    Build the UI context payload.
 
-    profile = _record_to_profile(record) if record is not None else None
+    Students only see their own profile.
+    Faculty only see overview counts/courses scoped to their own sections.
+    Admin sees everything.
+    """
+    from rbac import resolve_identity  # local import avoids circular at module level
+
+    if identity is None:
+        identity = resolve_identity(user_id)
+
+    df = _apply_mentor_overrides(_load_student_frame(data_path), assignments_path)
+    scoped = _scoped_frame(df, identity)
+
+    # Profile: students get their own; faculty/admin get None (no personal profile card)
+    profile: Dict[str, Any] | None = None
+    if identity.role == "student":
+        record = _find_student_row(df, identity.canonical)
+        profile = _record_to_profile(record) if record is not None else None
+    elif identity.role in {"faculty", "admin"}:
+        # Faculty/admin don't have a student profile card
+        profile = None
+
+    # Mentor directory: only from scoped rows (faculty sees their own students' mentors)
     mentor_directory = sorted(
         {
             (row["mentor_name"], row["mentor_email"], row["mentor_phone"])
-            for _, row in df.iterrows()
+            for _, row in scoped.iterrows()
             if row["mentor_name"]
         }
     )
 
     return {
-        "role": role,
+        "role":    identity.role,
         "user_id": user_id,
         "profile": profile,
         "overview": {
-            "students": int(df.shape[0]),
-            "courses": sorted(df["course"].dropna().unique().tolist()),
-            "sections": sorted(df["section"].dropna().unique().tolist()),
+            "students": int(scoped.shape[0]),
+            "courses":  sorted(scoped["course"].dropna().unique().tolist()),
+            "sections": sorted(scoped["section"].dropna().unique().tolist()),
         },
         "mentor_directory": [
             {"name": name, "email": email, "phone": phone}
@@ -235,8 +267,8 @@ def get_user_context(
         ],
         "faculty_directory": FACULTY_DIRECTORY,
         "permissions": {
-            "can_assign_mentor": role in {"faculty", "admin"},
-            "can_view_all_students": role in {"faculty", "admin"},
+            "can_assign_mentor":    identity.can("assign_mentor"),
+            "can_view_all_students":identity.can("view_all_students"),
         },
     }
 
@@ -250,25 +282,46 @@ def assign_mentor(
     mentor_name: str,
     mentor_email: str = "",
     mentor_phone: str = "",
+    identity: RoleIdentity | None = None,
 ) -> Dict[str, Any]:
-    if actor_role not in {"faculty", "admin"}:
-        raise PermissionError("Only faculty or admin users can assign mentors.")
+    """
+    Assign a mentor to a student.
+
+    Faculty can only assign mentors to students in their own courses/sections.
+    Admin can assign to any student.
+    """
+    from rbac import resolve_identity, check_permission
+
+    if identity is None:
+        identity = resolve_identity(actor_user_id)
+
+    # Top-level permission gate
+    check_permission(identity, "assign_mentor")
 
     df = _load_student_frame(data_path)
     target = _find_student_row(df, student_id)
     if target is None:
         raise ValueError(f"Student '{student_id}' was not found in the dataset.")
 
+    # Faculty scope check: the target student must be in the faculty's own courses
+    if identity.role == "faculty":
+        scoped = faculty_scope(identity, df)
+        if scoped[scoped["student_id"] == target["student_id"]].empty:
+            raise PermissionError(
+                f"[FACULTY] You can only assign mentors to students in your own courses/sections. "
+                f"Student '{student_id}' is not in your scope."
+            )
+
     overrides = _load_mentor_overrides(assignments_path)
     overrides[target["student_id"]] = {
-        "mentor_name": mentor_name.strip(),
+        "mentor_name":  mentor_name.strip(),
         "mentor_email": mentor_email.strip(),
         "mentor_phone": mentor_phone.strip(),
-        "assigned_by": actor_user_id.strip(),
+        "assigned_by":  actor_user_id.strip(),
     }
     _save_mentor_overrides(assignments_path, overrides)
 
-    updated_df = _apply_mentor_overrides(df, assignments_path)
+    updated_df     = _apply_mentor_overrides(df, assignments_path)
     updated_record = _find_student_row(updated_df, target["student_id"])
     return {
         "message": f"Mentor updated for {target['name']}.",
@@ -283,38 +336,96 @@ def retrieve_data(
     role: str = "unknown",
     user_id: str | None = None,
     assignments_path: str | None = None,
+    identity: RoleIdentity | None = None,
 ) -> Dict[str, Any]:
-    df = _apply_mentor_overrides(_load_student_frame(data_path), assignments_path)
-    course = _find_course(df, entity)
-    requester_record = _find_student_row(df, _extract_student_id(user_id))
-    target_record = _find_student_row(df, entity) or requester_record
-    filtered = df[df["course"] == course].copy() if course else df.copy()
+    """
+    Retrieve and filter data according to RBAC rules.
 
+    - admin   : sees all rows, all intents allowed.
+    - faculty : sees only rows in their own courses/sections.
+                Accessing another faculty's course raises PermissionError.
+    - student : can only query data that resolves to their own record.
+                Any intent that would expose other students is blocked.
+    - unknown : blocked for all organisational intents.
+    """
+    from rbac import resolve_identity, check_permission, action_for_intent
+
+    if identity is None:
+        identity = resolve_identity(user_id or "")
+
+    # ── Permission gate ──────────────────────────────────────────────────────
+    required_action = action_for_intent(intent)
+    check_permission(identity, required_action)
+
+    # ── Load & scope the base frame ──────────────────────────────────────────
+    df_full  = _apply_mentor_overrides(_load_student_frame(data_path), assignments_path)
+    df_scoped = _scoped_frame(df_full, identity)
+
+    # Resolve entity references inside the SCOPED frame
+    course           = _find_course(df_scoped, entity)
+    requester_record = _find_student_row(df_full, _extract_student_id(user_id))
+
+    # For student_profile / mentor / contact / class_teacher intents, the
+    # "target" is always the requesting student (students cannot look up others).
+    if identity.role == "student":
+        target_record = requester_record
+    else:
+        # Faculty/admin: entity may name a specific student
+        target_record = _find_student_row(df_scoped, entity) or requester_record
+
+    # Further narrow by course if one was resolved
+    filtered = df_scoped[df_scoped["course"] == course].copy() if course else df_scoped.copy()
+
+    # ── Extra student guard ──────────────────────────────────────────────────
+    # Students must never receive other students' data, regardless of intent.
+    if identity.role == "student":
+        if requester_record is not None:
+            usn = requester_record["student_id"]
+            filtered = filtered[filtered["student_id"] == usn]
+        else:
+            filtered = filtered.iloc[0:0]  # no matching record → empty
+
+    # ── Extra faculty guard: cross-course block ──────────────────────────────
+    # If the entity resolves to a specific course but the faculty has no rows
+    # in that course, deny access entirely.
+    if identity.role == "faculty" and course and filtered.empty:
+        raise PermissionError(
+            f"[FACULTY] You do not have access to course '{course}'. "
+            "You can only view data for courses where you are the assigned faculty or class teacher."
+        )
+
+    # ── Build result payload ─────────────────────────────────────────────────
     result: Dict[str, Any] = {
         "intent": intent,
-        "entity": course or (target_record["student_id"] if target_record is not None and entity != "general" else "general"),
+        "entity": course or (
+            target_record["student_id"]
+            if target_record is not None and entity != "general"
+            else "general"
+        ),
         "records": filtered.to_dict(orient="records"),
-        "raw_csv_data": df.to_dict(orient="records"),
+        # raw_csv_data is scoped — never leaks data outside the identity's scope
+        "raw_csv_data": df_scoped.to_dict(orient="records"),
     }
+
+    # ── Intent-specific summaries ────────────────────────────────────────────
 
     if intent == "student_count":
         result["summary"] = {
-            "count": int(filtered.shape[0]),
+            "count":  int(filtered.shape[0]),
             "course": course or "all_courses",
         }
 
     elif intent == "course_enrollment":
         result["summary"] = {
-            "course": course or "all_courses",
-            "count": int(filtered.shape[0]),
+            "course":  course or "all_courses",
+            "count":   int(filtered.shape[0]),
             "students": filtered[["student_id", "name", "section", "semester"]].head(50).to_dict(orient="records"),
         }
 
     elif intent == "faculty_list":
         faculty_rows = (
             filtered[["faculty", "class_teacher_name", "mentor_name"]]
-            .fillna("")
-            .astype(str)
+            .fillna("").astype(str)
         )
         names = sorted(
             {
@@ -324,9 +435,9 @@ def retrieve_data(
             }
         )
         result["summary"] = {
-            "course": course or "all_courses",
+            "course":  course or "all_courses",
             "faculty": names,
-            "count": len(names),
+            "count":   len(names),
         }
 
     elif intent == "grades_average":
@@ -334,25 +445,22 @@ def retrieve_data(
         tmp["grade_points"] = tmp["grade"].map(GRADE_MAP).fillna(0)
         if course:
             result["summary"] = {
-                "course": course,
+                "course":              course,
                 "average_grade_point": round(float(tmp["grade_points"].mean()), 2),
-                "average_cgpa": round(float(tmp["cgpa"].mean()), 2),
+                "average_cgpa":        round(float(tmp["cgpa"].mean()), 2),
             }
         else:
             grouped = (
                 tmp.groupby("course", as_index=False)[["grade_points", "cgpa"]]
-                .mean()
-                .round(2)
+                .mean().round(2)
             )
-            result["summary"] = {
-                "course_averages": grouped.to_dict(orient="records"),
-            }
+            result["summary"] = {"course_averages": grouped.to_dict(orient="records")}
 
     elif intent == "attendance_report":
         result["summary"] = {
-            "course": course or "all_courses",
-            "average_attendance_percent": round(float(filtered["attendance_percent"].mean()), 2),
-            "student_count": int(filtered.shape[0]),
+            "course":                    course or "all_courses",
+            "average_attendance_percent":round(float(filtered["attendance_percent"].mean()), 2),
+            "student_count":             int(filtered.shape[0]),
         }
 
     elif intent == "student_profile":
@@ -365,9 +473,9 @@ def retrieve_data(
             raise ValueError("No matching student was found for mentor lookup.")
         result["summary"] = {
             "student_id": target_record["student_id"],
-            "name": target_record["name"],
+            "name":       target_record["name"],
             "mentor": {
-                "name": target_record["mentor_name"],
+                "name":  target_record["mentor_name"],
                 "email": target_record["mentor_email"],
                 "phone": target_record["mentor_phone"],
             },
@@ -377,11 +485,11 @@ def retrieve_data(
         if target_record is None:
             raise ValueError("No matching student was found for class teacher lookup.")
         result["summary"] = {
-            "student_id": target_record["student_id"],
-            "name": target_record["name"],
-            "section": target_record["section"],
+            "student_id":  target_record["student_id"],
+            "name":        target_record["name"],
+            "section":     target_record["section"],
             "class_teacher": {
-                "name": target_record["class_teacher_name"],
+                "name":  target_record["class_teacher_name"],
                 "email": target_record["class_teacher_email"],
                 "phone": target_record["class_teacher_phone"],
             },
@@ -389,8 +497,9 @@ def retrieve_data(
 
     elif intent == "backlog_report":
         target_frame = filtered
-        if target_record is not None:
-            target_frame = df[df["student_id"] == target_record["student_id"]]
+        if identity.role == "student" and requester_record is not None:
+            # Student sees only their own backlogs
+            target_frame = filtered[filtered["student_id"] == requester_record["student_id"]]
         result["summary"] = {
             "count_with_backlogs": int((target_frame["backlog_count"] > 0).sum()),
             "students": target_frame[target_frame["backlog_count"] > 0][
@@ -403,19 +512,19 @@ def retrieve_data(
             raise ValueError("No matching student was found for contact lookup.")
         result["summary"] = {
             "student_id": target_record["student_id"],
-            "name": target_record["name"],
+            "name":       target_record["name"],
             "student_contact": {
-                "phone": target_record["phone"],
-                "college_email": target_record["college_email"],
+                "phone":          target_record["phone"],
+                "college_email":  target_record["college_email"],
                 "personal_email": target_record["personal_email"],
             },
             "mentor_contact": {
-                "name": target_record["mentor_name"],
+                "name":  target_record["mentor_name"],
                 "email": target_record["mentor_email"],
                 "phone": target_record["mentor_phone"],
             },
             "class_teacher_contact": {
-                "name": target_record["class_teacher_name"],
+                "name":  target_record["class_teacher_name"],
                 "email": target_record["class_teacher_email"],
                 "phone": target_record["class_teacher_phone"],
             },
@@ -423,15 +532,15 @@ def retrieve_data(
 
     else:
         result["summary"] = {
-            "count": int(filtered.shape[0]),
-            "message": "Organizational query matched the dataset but no specialized intent was triggered.",
+            "count":   int(filtered.shape[0]),
+            "message": "Organisational query matched the dataset but no specialised intent was triggered.",
         }
 
-    if role == "student" and requester_record is not None:
+    if identity.role == "student" and requester_record is not None:
         result["requester_context"] = {
             "student_id": requester_record["student_id"],
-            "course": requester_record["course"],
-            "section": requester_record["section"],
+            "course":     requester_record["course"],
+            "section":    requester_record["section"],
         }
 
     return result
