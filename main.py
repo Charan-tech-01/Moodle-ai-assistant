@@ -27,7 +27,7 @@ from starlette.background import BackgroundTask
 
 from classifier import classify_query
 from data_retriever import assign_mentor, get_user_context, retrieve_data
-from auth import resolve_identity, check_permission, action_for_intent
+from auth import resolve_identity, check_permission, action_for_intent_and_role
 from response_formatter import (
     create_excel,
     create_pdf,
@@ -48,7 +48,7 @@ STATIC_DIR             = BASE_DIR / "static"
 # ── In-memory conversation store ─────────────────────────────────────────────
 # Keyed by user_id.  Each value is a list of {"role": "user"|"assistant", "content": str}
 # We keep at most MAX_HISTORY turns to stay within token limits.
-MAX_HISTORY = 10
+MAX_HISTORY = 6   # 6 turns = 12 messages ≈ ~1500 tokens for history
 _chat_history: dict[str, list[dict]] = defaultdict(list)
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -124,34 +124,79 @@ async def ask_groq_with_history(
     )
 
 
+# ── Intent → which columns the LLM actually needs ────────────────────────────
+_INTENT_COLS: dict[str, set[str]] = {
+    "course_enrollment": {"student_id", "name", "section", "semester", "attendance_percent", "cgpa", "grade"},
+    "student_count":     {"student_id", "name", "section", "course"},
+    "attendance_report": {"student_id", "name", "section", "attendance_percent", "course"},
+    "backlog_report":    {"student_id", "name", "section", "backlog_count", "backlog_subjects", "course"},
+    "grades_average":    {"student_id", "name", "section", "grade", "cgpa", "course"},
+    "faculty_list":      {"faculty", "class_teacher_name", "mentor_name", "section", "course"},
+    "student_profile":   {"student_id", "name", "department", "semester", "section", "course",
+                          "grade", "attendance_percent", "cgpa", "backlog_count", "backlog_subjects",
+                          "mentor_name", "mentor_email", "mentor_phone",
+                          "class_teacher_name", "class_teacher_email", "class_teacher_phone",
+                          "phone", "college_email", "area_of_interest"},
+    "mentor_lookup":     {"student_id", "name", "mentor_name", "mentor_email", "mentor_phone"},
+    "class_teacher_info":{"student_id", "name", "section",
+                          "class_teacher_name", "class_teacher_email", "class_teacher_phone"},
+    "contact_lookup":    {"student_id", "name", "phone", "college_email",
+                          "mentor_name", "mentor_email", "mentor_phone",
+                          "class_teacher_name", "class_teacher_email", "class_teacher_phone"},
+}
+_DEFAULT_COLS = {"student_id", "name", "section", "course", "attendance_percent", "cgpa", "grade"}
+
+# Token budget: stay comfortably under Groq free-tier 6000 TPM per request
+# ~4 chars ≈ 1 token; we reserve ~3000 tokens for system prompt + history + answer
+_MAX_DATA_CHARS = 8_000   # ≈ 2000 tokens for the data block
+
+
 # ── Data helpers ──────────────────────────────────────────────────────────────
 def _build_retrieval_payload(retrieved: dict) -> dict:
     """
-    Return ALL records (not just 12) so the LLM sees the complete dataset
-    scoped to this user. Records are trimmed to essential columns to keep
-    the payload size reasonable.
+    Build a token-safe payload for the LLM.
+
+    Strategy:
+      1. Always include the full summary object (aggregate stats, counts).
+      2. Select only the columns relevant to the intent.
+      3. Fit as many records as possible within _MAX_DATA_CHARS.
+         If records are truncated, add a note so the LLM uses the summary.
     """
     records = retrieved.get("records", [])
+    intent  = retrieved.get("intent", "general")
 
-    # Keep only the columns the LLM needs — drop raw CSV noise
-    essential_cols = {
-        "student_id", "name", "course", "section", "semester",
-        "grade", "attendance_percent", "cgpa", "backlog_count",
-        "backlog_subjects", "faculty", "class_teacher_name",
-        "mentor_name", "mentor_email", "mentor_phone", "phone",
-        "college_email", "area_of_interest",
-    }
+    # Pick the minimal column set for this intent
+    cols = _INTENT_COLS.get(intent, _DEFAULT_COLS)
     slim_records = [
-        {k: v for k, v in r.items() if k in essential_cols}
+        {k: v for k, v in r.items() if k in cols}
         for r in records
     ]
 
+    total = len(slim_records)
+    included: list[dict] = []
+    char_budget = _MAX_DATA_CHARS
+
+    for rec in slim_records:
+        serialised = json.dumps(rec)
+        if char_budget - len(serialised) < 0:
+            break
+        included.append(rec)
+        char_budget -= len(serialised)
+
+    truncated = len(included) < total
+
     return {
-        "intent":       retrieved.get("intent"),
-        "entity":       retrieved.get("entity"),
-        "summary":      retrieved.get("summary", {}),
-        "record_count": len(slim_records),
-        "records":      slim_records,          # ALL records, not just 12
+        "intent":        intent,
+        "entity":        retrieved.get("entity"),
+        "summary":       retrieved.get("summary", {}),   # always full
+        "record_count":  total,                          # true total
+        "records_shown": len(included),
+        "records":       included,
+        "truncated":     truncated,
+        "truncation_note": (
+            f"Only {len(included)} of {total} records shown due to size limits. "
+            "Use the summary object for accurate totals and averages."
+        ) if truncated else None,
     }
 
 
@@ -181,10 +226,13 @@ def _build_system_prompt(role: str) -> str:
     if role == "student":
         return base + (
             "The user is a STUDENT. Rules:\n"
-            "- Only show their own data. Never expose other students' details.\n"
-            "- Be friendly and personal — address them by name if known.\n"
-            "- Show grades, attendance, CGPA, mentor, class teacher, backlogs clearly.\n"
-            "- If they ask about someone else, politely decline.\n"
+            "- You MUST answer questions about their own data — CGPA, grades, attendance, "
+            "backlogs, mentor, class teacher, contacts. This is always allowed.\n"
+            "- The data payload contains ONLY this student's own record. Show it fully and directly.\n"
+            "- If asked 'what is my CGPA', read it from the records and state it clearly.\n"
+            "- If asked 'what are my grades', show them. Never refuse own-data queries.\n"
+            "- Only refuse if they explicitly ask about a DIFFERENT student by name or USN.\n"
+            "- Be friendly and personal — use their name.\n"
         )
 
     if role == "faculty":
@@ -278,8 +326,8 @@ async def ask(payload: AskRequest):
         intent     = classification.get("intent",     "general")
         entity     = classification.get("entity",     "general")
 
-        # ── 3. RBAC permission gate ───────────────────────────────────────────
-        check_permission(identity, action_for_intent(intent))
+        # ── 3. RBAC permission gate (role-aware) ─────────────────────────────
+        check_permission(identity, action_for_intent_and_role(intent, role))
 
         # ── 4. Build user message with data context ───────────────────────────
         if query_type == "organizational_query":
@@ -328,8 +376,11 @@ async def ask(payload: AskRequest):
         # ── 7. Append this turn to history (trimmed to MAX_HISTORY) ───────────
         # Store the original clean query (not the data-padded message)
         # so history stays readable without repeating the full data blob.
+        # Truncate long assistant answers in history to save tokens —
+        # keep first 400 chars which captures the key facts.
+        history_answer = answer[:400] + "…" if len(answer) > 400 else answer
         history.append({"role": "user",      "content": payload.query})
-        history.append({"role": "assistant", "content": answer})
+        history.append({"role": "assistant", "content": history_answer})
         if len(history) > MAX_HISTORY * 2:
             # Keep only the most recent MAX_HISTORY turns
             _chat_history[payload.user_id] = history[-(MAX_HISTORY * 2):]

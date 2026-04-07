@@ -446,14 +446,13 @@ def retrieve_data(
                 Any intent that would expose other students is blocked.
     - unknown : blocked for all organisational intents.
     """
-    from auth import resolve_identity, check_permission, action_for_intent
+    from auth import resolve_identity, check_permission, action_for_intent_and_role
 
     if identity is None:
         identity = resolve_identity(user_id or "")
 
     # ── Permission gate ──────────────────────────────────────────────────────
-    # For students, self-access intents resolve to view_own_profile
-    required_action = action_for_intent(intent)
+    required_action = action_for_intent_and_role(intent, identity.role)
     check_permission(identity, required_action)
 
     # ── Load & scope the base frame ──────────────────────────────────────────
