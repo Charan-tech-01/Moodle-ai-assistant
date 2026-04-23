@@ -20,13 +20,29 @@ ALLOWED_INTENTS = {
     "general",
 }
 
-COURSE_NAMES = [
-    "Machine Learning",
-    "Artificial Intelligence",
-    "Data Structures",
-    "Deep Learning",
-    "Cloud Computing",
-]
+def _extract_entity(query: str) -> str:
+    """Extract a meaningful entity from the query using the database."""
+    from db import get_connection
+
+    lowered = query.lower()
+
+    # Try matching against real course names in the DB
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, fullname FROM mdl_course WHERE id > 1")
+            for row in cur.fetchall():
+                # Match on the readable part of the course name (before the underscore code)
+                name = row["fullname"].split("_")[0].strip()
+                if name.lower() in lowered:
+                    return name
+
+    # Try matching a student ID pattern
+    import re
+    student_id_match = re.search(r"\b\d[a-z0-9]{7,}\b", lowered, flags=re.IGNORECASE)
+    if student_id_match:
+        return student_id_match.group(0).upper()
+
+    return "general"
 
 DEFAULT_CLASSIFICATION = {
     "query_type": "general_query",
@@ -49,20 +65,6 @@ def _strip_markdown_fences(content: str) -> str:
         text = re.sub(r"```$", "", text).strip()
     return text
 
-
-def _extract_entity(query: str) -> str:
-    lowered = query.lower()
-    for course in COURSE_NAMES:
-        if course.lower() in lowered:
-            return course
-
-    student_id_match = re.search(r"\b\d[a-z0-9]{7,}\b", lowered, flags=re.IGNORECASE)
-    if student_id_match:
-        return student_id_match.group(0).upper()
-
-    return "general"
-
-
 def _heuristic_classify(query: str) -> Dict[str, str]:
     lowered = query.lower()
     entity = _extract_entity(query)
@@ -83,7 +85,7 @@ def _heuristic_classify(query: str) -> Dict[str, str]:
         intent = "attendance_report"
     elif any(word in lowered for word in ["average grade", "cgpa average", "grade average"]):
         intent = "grades_average"
-    elif any(word in lowered for word in ["faculty", "professor", "teacher list"]):
+    elif any(word in lowered for word in ["faculty", "professor", "teacher list", "who teaches", "teaches", "taught by", "instructor"]):
         intent = "faculty_list"
     elif any(word in lowered for word in ["enrollment", "enrolled", "list students", "students in"]):
         intent = "course_enrollment"
@@ -166,6 +168,9 @@ def _classify_sync(query: str) -> Dict[str, str]:
 
         if enriched["intent"] == "general" and _heuristic_classify(query)["intent"] != "general":
             return _heuristic_classify(query)
+        # Override garbage entity values from LLM
+        if enriched["entity"] in ("course name", "student USN", "general", ""):
+            enriched["entity"] = _extract_entity_from_query(query)
         return enriched
     except Exception:
         return _heuristic_classify(query)

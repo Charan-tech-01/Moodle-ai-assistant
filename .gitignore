@@ -5,3 +5,7 @@ __pycache__/
 .env
 *.log
 finalyear/
+.env 
+data/mentor_assignments.json 
+*.sql 
+peek_report.txt 

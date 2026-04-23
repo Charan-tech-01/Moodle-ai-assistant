@@ -1,676 +1,731 @@
+"""
+data_retriever.py
+
+Data retrieval layer for the Moodle AI Assistant.
+Queries the real Moodle MariaDB database instead of CSV files.
+
+Each intent maps to one or more SQL queries against Moodle's schema:
+  mdl_user, mdl_course, mdl_user_enrolments, mdl_enrol,
+  mdl_grade_grades, mdl_grade_items, mdl_attendance_log,
+  mdl_attendance_sessions, mdl_attendance_statuses,
+  mdl_role_assignments, mdl_role, mdl_context, mdl_user_info_data
+"""
+
 import json
-import re
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
-import pandas as pd
-
-# Import the full RBAC layer
-from auth import RoleIdentity, check_permission, faculty_scope, student_scope
-
-GRADE_MAP = {"A": 4.0, "B": 3.0, "C": 2.0, "D": 1.0, "F": 0.0}
-CORE_COLUMNS = {
-    "student_id",
-    "name",
-    "course",
-    "grade",
-    "attendance_percent",
-    "faculty",
-    "department",
-    "semester",
-}
-OPTIONAL_DEFAULTS = {
-    "section": "",
-    "class_teacher_name": "",
-    "class_teacher_email": "",
-    "class_teacher_phone": "",
-    "mentor_name": "",
-    "mentor_email": "",
-    "mentor_phone": "",
-    "phone": "",
-    "college_email": "",
-    "personal_email": "",
-    "area_of_interest": "",
-    "cgpa": 0.0,
-    "aggregate_percent": 0.0,
-    "backlog_count": 0,
-    "backlog_subjects": "",
-    "x_percent": 0.0,
-    "xii_percent": 0.0,
-    "year_gaps": 0,
-    "gender": "",
-    "dob": "",
-}
-FACULTY_DIRECTORY = [
-    {"name": "Dr. Asha Rao", "email": "asha.rao@nmit.ac.in", "phone": "9845001101", "role": "Mentor"},
-    {"name": "Prof. Vivek Shenoy", "email": "vivek.shenoy@nmit.ac.in", "phone": "9845001102", "role": "Mentor"},
-    {"name": "Dr. Neha Kulkarni", "email": "neha.kulkarni@nmit.ac.in", "phone": "9845001103", "role": "Mentor"},
-    {"name": "Prof. Kiran Bhat", "email": "kiran.bhat@nmit.ac.in", "phone": "9845001104", "role": "Mentor"},
-    {"name": "Dr. Suma Pai", "email": "suma.pai@nmit.ac.in", "phone": "9845001105", "role": "Mentor"},
-    {"name": "Prof. Harish Nayak", "email": "harish.nayak@nmit.ac.in", "phone": "9845001106", "role": "Mentor"},
-]
+from db import get_connection
 
 
-# ── I/O helpers ───────────────────────────────────────────────────────────────
-
-def _read_table(data_path: str) -> pd.DataFrame:
-    path = Path(data_path)
-    if path.suffix.lower() in {".xlsx", ".xls"}:
-        return pd.read_excel(path)
-    return pd.read_csv(path, sep=None, engine="python")
-
-
-def _load_student_frame(data_path: str) -> pd.DataFrame:
-    df = _read_table(data_path)
-    df.columns = [str(column).strip() for column in df.columns]
-
-    missing = CORE_COLUMNS - set(df.columns)
-    if missing:
-        raise ValueError(
-            "Dataset is missing required column(s): "
-            + ", ".join(sorted(missing))
-        )
-
-    for column, default in OPTIONAL_DEFAULTS.items():
-        if column not in df.columns:
-            df[column] = default
-
-    string_columns = [
-        "student_id", "name", "course", "faculty", "section", "department",
-        "class_teacher_name", "class_teacher_email", "class_teacher_phone",
-        "mentor_name", "mentor_email", "mentor_phone",
-        "phone", "college_email", "personal_email",
-        "area_of_interest", "backlog_subjects",
-    ]
-    for column in string_columns:
-        df[column] = df[column].fillna("").astype(str).str.strip()
-
-    df["student_id"] = df["student_id"].str.upper()
-    df["cgpa"] = pd.to_numeric(df["cgpa"], errors="coerce").fillna(0.0)
-    df["aggregate_percent"] = pd.to_numeric(df["aggregate_percent"], errors="coerce").fillna(0.0)
-    df["attendance_percent"] = pd.to_numeric(df["attendance_percent"], errors="coerce").fillna(0.0)
-    df["backlog_count"] = pd.to_numeric(df["backlog_count"], errors="coerce").fillna(0).astype(int)
-    return df
+def _clean(obj: Any) -> Any:
+    """Recursively convert Decimal -> float so JSON serialization works."""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: _clean(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_clean(i) for i in obj]
+    return obj
 
 
-def _load_mentor_overrides(assignments_path: str) -> Dict[str, Dict[str, str]]:
-    path = Path(assignments_path)
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return {}
+# ---------------------------------------------------------------------------
+# Course search helper
+# ---------------------------------------------------------------------------
+
+def _find_course(entity: str) -> Optional[Dict[str, Any]]:
+    """
+    Find a course by fuzzy matching on fullname or shortname.
+    Returns dict with id, shortname, fullname or None.
+    """
+    if not entity or entity.lower() == "general":
+        return None
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Try exact match first
+            cur.execute(
+                "SELECT id, shortname, fullname FROM mdl_course "
+                "WHERE fullname = %s OR shortname = %s LIMIT 1",
+                (entity, entity),
+            )
+            row = cur.fetchone()
+            if row:
+                return row
+
+            # Fuzzy match
+            pattern = f"%{entity}%"
+            cur.execute(
+                "SELECT id, shortname, fullname FROM mdl_course "
+                "WHERE fullname LIKE %s OR shortname LIKE %s "
+                "ORDER BY id LIMIT 1",
+                (pattern, pattern),
+            )
+            return cur.fetchone()
 
 
-def _save_mentor_overrides(assignments_path: str, overrides: Dict[str, Dict[str, str]]) -> None:
-    Path(assignments_path).write_text(json.dumps(overrides, indent=2), encoding="utf-8")
-
-
-def _apply_mentor_overrides(df: pd.DataFrame, assignments_path: str | None) -> pd.DataFrame:
-    if not assignments_path:
-        return df
-    overrides = _load_mentor_overrides(assignments_path)
-    if not overrides:
-        return df
-    updated = df.copy()
-    for student_id, mentor in overrides.items():
-        mask = updated["student_id"] == student_id.upper()
-        if mask.any():
-            updated.loc[mask, "mentor_name"]  = mentor.get("mentor_name", "")
-            updated.loc[mask, "mentor_email"] = mentor.get("mentor_email", "")
-            updated.loc[mask, "mentor_phone"] = mentor.get("mentor_phone", "")
-    return updated
-
-
-def _extract_student_id(user_id: str | None) -> str | None:
+def _find_user(user_id: str) -> Optional[Dict[str, Any]]:
+    """Find a user by numeric ID, username, or name search."""
     if not user_id:
         return None
-    normalized = user_id.strip().upper()
-    if normalized.startswith("STU"):
-        normalized = re.sub(r"^STU[-_:]?", "", normalized)
-    return normalized or None
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Try numeric ID
+            try:
+                numeric = int(user_id)
+                cur.execute(
+                    "SELECT id, username, firstname, lastname, email, "
+                    "phone1, phone2, department, institution "
+                    "FROM mdl_user WHERE id = %s AND deleted = 0",
+                    (numeric,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return row
+            except (ValueError, TypeError):
+                pass
+
+            # Try username
+            cur.execute(
+                "SELECT id, username, firstname, lastname, email, "
+                "phone1, phone2, department, institution "
+                "FROM mdl_user WHERE username = %s AND deleted = 0",
+                (user_id.strip(),),
+            )
+            row = cur.fetchone()
+            if row:
+                return row
+
+            # Try name search
+            pattern = f"%{user_id}%"
+            cur.execute(
+                "SELECT id, username, firstname, lastname, email, "
+                "phone1, phone2, department, institution "
+                "FROM mdl_user WHERE deleted = 0 "
+                "AND (CONCAT(firstname, ' ', lastname) LIKE %s) "
+                "LIMIT 1",
+                (pattern,),
+            )
+            return cur.fetchone()
 
 
-def _find_student_row(df: pd.DataFrame, token: str | None) -> pd.Series | None:
-    if not token or token == "GENERAL":
-        return None
-    normalized = token.strip().upper()
-    direct = df[df["student_id"] == normalized]
-    if not direct.empty:
-        return direct.iloc[0]
-    by_name = df[df["name"].str.upper().str.contains(normalized, na=False)]
-    if not by_name.empty:
-        return by_name.iloc[0]
-    return None
+# ---------------------------------------------------------------------------
+# Intent handlers
+# ---------------------------------------------------------------------------
+
+def _student_count(course: Optional[Dict], entity: str) -> Dict[str, Any]:
+    """Count students enrolled in a course (or all courses)."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if course:
+                cur.execute(
+                    "SELECT COUNT(DISTINCT ue.userid) AS cnt "
+                    "FROM mdl_user_enrolments ue "
+                    "JOIN mdl_enrol e ON e.id = ue.enrolid "
+                    "WHERE e.courseid = %s AND ue.status = 0",
+                    (course["id"],),
+                )
+                count = cur.fetchone()["cnt"]
+                return {
+                    "count": count,
+                    "course": course["fullname"],
+                }
+            else:
+                # Count all unique students (users with Student role)
+                cur.execute(
+                    "SELECT COUNT(*) AS cnt FROM mdl_user_info_data "
+                    "WHERE fieldid = 1 AND TRIM(data) = 'Student'",
+                )
+                count = cur.fetchone()["cnt"]
+                return {"count": count, "course": "all_courses"}
 
 
-def _find_course(df: pd.DataFrame, token: str | None) -> str | None:
-    if not token or token.lower() == "general":
-        return None
-    lowered = token.lower()
-    for course in df["course"].dropna().unique().tolist():
-        if lowered in course.lower() or course.lower() in lowered:
-            return course
-    return None
+def _course_enrollment(course: Optional[Dict], entity: str, user: Optional[Dict] = None) -> Dict[str, Any]:
+    """List students enrolled in a course, or a student's own courses."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if course:
+                cur.execute(
+                    "SELECT u.id AS student_id, "
+                    "CONCAT(u.firstname, ' ', u.lastname) AS name, "
+                    "u.username, u.email "
+                    "FROM mdl_user_enrolments ue "
+                    "JOIN mdl_enrol e ON e.id = ue.enrolid "
+                    "JOIN mdl_user u ON u.id = ue.userid "
+                    "WHERE e.courseid = %s AND ue.status = 0 "
+                    "AND u.deleted = 0 "
+                    "ORDER BY u.lastname, u.firstname "
+                    "LIMIT 50",
+                    (course["id"],),
+                )
+                students = cur.fetchall()
+                return {
+                    "course": course["fullname"],
+                    "count": len(students),
+                    "students": students,
+                }
+            elif user:
+                # Student asking about their own enrolled courses
+                cur.execute(
+                    "SELECT c.id, c.fullname, c.shortname "
+                    "FROM mdl_user_enrolments ue "
+                    "JOIN mdl_enrol e ON e.id = ue.enrolid "
+                    "JOIN mdl_course c ON c.id = e.courseid "
+                    "WHERE ue.userid = %s AND ue.status = 0 "
+                    "ORDER BY c.fullname",
+                    (user["id"],),
+                )
+                courses = cur.fetchall()
+                fullname = f"{user['firstname']} {user['lastname']}".strip()
+                return {
+                    "course": "all_courses",
+                    "student_name": fullname,
+                    "count": len(courses),
+                    "enrolled_courses": courses,
+                }
+            else:
+                return {
+                    "course": "all_courses",
+                    "count": 0,
+                    "students": [],
+                    "message": "Please specify a course name.",
+                }
 
 
-def _record_to_profile(record: pd.Series) -> Dict[str, Any]:
-    return {
-        "student_id":       record["student_id"],
-        "name":             record["name"],
-        "department":       record["department"],
-        "semester":         int(record["semester"]) if pd.notna(record["semester"]) else None,
-        "section":          record["section"],
-        "course":           record["course"],
-        "grade":            record["grade"],
-        "attendance_percent": float(record["attendance_percent"]),
-        "cgpa":             float(record["cgpa"]),
-        "aggregate_percent":float(record["aggregate_percent"]),
-        "backlog_count":    int(record["backlog_count"]),
-        "backlog_subjects": record["backlog_subjects"],
-        "area_of_interest": record["area_of_interest"],
-        "phone":            record["phone"],
-        "college_email":    record["college_email"],
-        "personal_email":   record["personal_email"],
-        "class_teacher": {
-            "name":  record["class_teacher_name"],
-            "email": record["class_teacher_email"],
-            "phone": record["class_teacher_phone"],
-        },
-        "mentor": {
-            "name":  record["mentor_name"],
-            "email": record["mentor_email"],
-            "phone": record["mentor_phone"],
-        },
-        "course_faculty": {
-            "name": record["faculty"],
-        },
-    }
+def _faculty_list(course: Optional[Dict], entity: str) -> Dict[str, Any]:
+    """List faculty (editing teachers + teachers) for a course."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            query = (
+                "SELECT DISTINCT "
+                "CONCAT(u.firstname, ' ', u.lastname) AS name, "
+                "u.email, r.shortname AS role_type "
+                "FROM mdl_role_assignments ra "
+                "JOIN mdl_context ctx ON ctx.id = ra.contextid "
+                "JOIN mdl_user u ON u.id = ra.userid "
+                "JOIN mdl_role r ON r.id = ra.roleid "
+                "WHERE ctx.contextlevel = 50 "  # course context
+                "AND r.shortname IN ('editingteacher', 'teacher') "
+                "AND u.deleted = 0 "
+            )
+            params = []
+            if course:
+                query += "AND ctx.instanceid = %s "
+                params.append(course["id"])
+
+            query += "ORDER BY name LIMIT 50"
+            cur.execute(query, params)
+            faculty = cur.fetchall()
+            names = [f["name"] for f in faculty]
+            return {
+                "course": course["fullname"] if course else "all_courses",
+                "faculty": names,
+                "faculty_details": faculty,
+                "count": len(names),
+            }
 
 
-def _record_to_faculty_profile(
-    faculty_id: str,
-    scoped: pd.DataFrame,
-    full_df: pd.DataFrame,
+def _grades_average(course: Optional[Dict], entity: str) -> Dict[str, Any]:
+    """Average final grade for a course or across all courses."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if course:
+                cur.execute(
+                    "SELECT AVG(gg.finalgrade) AS avg_grade, "
+                    "COUNT(gg.id) AS grade_count "
+                    "FROM mdl_grade_grades gg "
+                    "JOIN mdl_grade_items gi ON gi.id = gg.itemid "
+                    "WHERE gi.courseid = %s "
+                    "AND gi.itemtype = 'course' "
+                    "AND gg.finalgrade IS NOT NULL",
+                    (course["id"],),
+                )
+                row = cur.fetchone()
+                return {
+                    "course": course["fullname"],
+                    "average_grade": round(float(row["avg_grade"] or 0), 2),
+                    "grade_count": row["grade_count"],
+                }
+            else:
+                # Per-course averages
+                cur.execute(
+                    "SELECT c.fullname AS course, "
+                    "ROUND(AVG(gg.finalgrade), 2) AS avg_grade, "
+                    "COUNT(gg.id) AS grade_count "
+                    "FROM mdl_grade_grades gg "
+                    "JOIN mdl_grade_items gi ON gi.id = gg.itemid "
+                    "JOIN mdl_course c ON c.id = gi.courseid "
+                    "WHERE gi.itemtype = 'course' "
+                    "AND gg.finalgrade IS NOT NULL "
+                    "GROUP BY c.id, c.fullname "
+                    "ORDER BY avg_grade DESC "
+                    "LIMIT 10",
+                )
+                averages = cur.fetchall()
+                return {"course_averages": averages}
+
+
+def _attendance_report(
+    course: Optional[Dict],
+    entity: str,
+    user: Optional[Dict] = None,
 ) -> Dict[str, Any]:
     """
-    Build a faculty profile card from the rows they own in the dataset.
-    Mirrors the shape of _record_to_profile so the frontend renders identically.
+    Attendance report from mdl_attendance_log.
+    Can filter by course AND/OR specific student.
     """
-    # ── Resolve faculty name from the scoped rows ────────────────────────────
-    # The faculty column stores the name (e.g. "Dr. Asha Rao").
-    # We get it from the first scoped row, then look up the FACULTY_DIRECTORY
-    # entry by name to get email and phone.
-    fac_name_from_data = ""
-    if not scoped.empty and "faculty" in scoped.columns:
-        # Prefer rows where faculty_id matches directly
-        if "faculty_id" in scoped.columns:
-            fid_rows = scoped[scoped["faculty_id"].str.upper() == faculty_id.upper()]
-            if not fid_rows.empty:
-                fac_name_from_data = str(fid_rows.iloc[0]["faculty"]).strip()
-        if not fac_name_from_data:
-            fac_name_from_data = str(scoped.iloc[0]["faculty"]).strip()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            query = (
+                "SELECT "
+                "u.id AS student_id, "
+                "CONCAT(u.firstname, ' ', u.lastname) AS name, "
+                "COUNT(al.id) AS total_sessions, "
+                "SUM(CASE WHEN ast.acronym = 'P' THEN 1 ELSE 0 END) AS present, "
+                "SUM(CASE WHEN ast.acronym = 'L' THEN 1 ELSE 0 END) AS late, "
+                "SUM(CASE WHEN ast.acronym = 'A' THEN 1 ELSE 0 END) AS absent, "
+                "SUM(CASE WHEN ast.acronym = 'E' THEN 1 ELSE 0 END) AS excused, "
+                "ROUND("
+                "  SUM(CASE WHEN ast.acronym IN ('P','L','E') THEN 1 ELSE 0 END) "
+                "  * 100.0 / NULLIF(COUNT(al.id), 0), 2"
+                ") AS attendance_percent "
+                "FROM mdl_attendance_log al "
+                "JOIN mdl_attendance_sessions asess ON asess.id = al.sessionid "
+                "JOIN mdl_attendance a ON a.id = asess.attendanceid "
+                "JOIN mdl_course c ON c.id = a.course "
+                "JOIN mdl_user u ON u.id = al.studentid "
+                "JOIN mdl_attendance_statuses ast ON ast.id = al.statusid "
+                "WHERE u.deleted = 0 "
+            )
+            params: list = []
 
-    # Find matching FACULTY_DIRECTORY entry by name
-    fac_dir_entry: Dict[str, Any] = {}
-    for entry in FACULTY_DIRECTORY:
-        if fac_name_from_data and entry["name"] == fac_name_from_data:
-            fac_dir_entry = entry
-            break
+            if course:
+                query += "AND c.id = %s "
+                params.append(course["id"])
 
-    # If still not found, build a minimal entry from the CSV data
-    if not fac_dir_entry and fac_name_from_data:
-        fac_dir_entry = {"name": fac_name_from_data, "email": "", "phone": "", "role": "Faculty"}
+            if user:
+                query += "AND u.id = %s "
+                params.append(user["id"])
 
-    # Course & section summary
-    courses  = sorted(scoped["course"].dropna().unique().tolist())
-    sections = sorted(scoped["section"].dropna().unique().tolist())
-    student_count = int(scoped.shape[0])
+            query += "GROUP BY u.id, name ORDER BY name "
 
-    # Average stats across the faculty's students
-    avg_att  = round(float(scoped["attendance_percent"].mean()), 1) if student_count else 0.0
-    avg_cgpa = round(float(scoped["cgpa"].mean()), 2)              if student_count else 0.0
-    backlog_students = int((scoped["backlog_count"] > 0).sum())
+            # If asking about a specific student, get their row
+            if user:
+                cur.execute(query, params)
+                rows = cur.fetchall()
+                if rows:
+                    r = rows[0]
+                    return {
+                        "course": course["fullname"] if course else "all_courses",
+                        "student_id": r["student_id"],
+                        "student_name": r["name"],
+                        "attendance_percent": float(r["attendance_percent"] or 0),
+                        "total_sessions": r["total_sessions"],
+                        "present": r["present"],
+                        "absent": r["absent"],
+                        "late": r["late"],
+                        "excused": r["excused"],
+                        "student_count": 1,
+                    }
 
-    # Class teacher role — rows where they are the class teacher
-    ct_col = "class_teacher_id" if "class_teacher_id" in scoped.columns else "class_teacher_name"
-    ct_match_val = faculty_id if ct_col == "class_teacher_id" else fac_dir_entry.get("name", faculty_id)
-    ct_rows  = full_df[full_df[ct_col] == ct_match_val]
-    ct_sections = sorted(ct_rows["section"].dropna().unique().tolist()) if not ct_rows.empty else []
+            # Class-wide summary
+            query += "LIMIT 50"
+            cur.execute(query, params)
+            rows = cur.fetchall()
 
-    # Mentor role
-    m_col = "mentor_id" if "mentor_id" in scoped.columns else "mentor_name"
-    m_match_val = faculty_id if m_col == "mentor_id" else fac_dir_entry.get("name", faculty_id)
-    mentee_rows  = full_df[full_df[m_col] == m_match_val]
-    mentee_count = int(mentee_rows.shape[0])
+            if rows:
+                avg_pct = sum(float(r["attendance_percent"] or 0) for r in rows) / len(rows)
+            else:
+                avg_pct = 0
+
+            return {
+                "course": course["fullname"] if course else "all_courses",
+                "average_attendance_percent": round(avg_pct, 2),
+                "student_count": len(rows),
+                "students": rows[:12],  # sample
+            }
+
+
+def _student_profile(user: Optional[Dict]) -> Dict[str, Any]:
+    """Full profile for a student: info + enrolled courses + grades."""
+    if not user:
+        raise ValueError("No matching student profile was found.")
+
+    moodle_id = user["id"]
+    fullname = f"{user['firstname']} {user['lastname']}".strip()
+
+    profile: Dict[str, Any] = {
+        "student_id": moodle_id,
+        "name": fullname,
+        "username": user["username"],
+        "email": user["email"],
+        "phone": user.get("phone1", ""),
+        "department": user.get("department", ""),
+    }
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Enrolled courses
+            cur.execute(
+                "SELECT c.id, c.fullname, c.shortname "
+                "FROM mdl_user_enrolments ue "
+                "JOIN mdl_enrol e ON e.id = ue.enrolid "
+                "JOIN mdl_course c ON c.id = e.courseid "
+                "WHERE ue.userid = %s AND ue.status = 0 "
+                "ORDER BY c.fullname",
+                (moodle_id,),
+            )
+            profile["enrolled_courses"] = cur.fetchall()
+            profile["course_count"] = len(profile["enrolled_courses"])
+
+            # Course total grades
+            cur.execute(
+                "SELECT c.fullname AS course, "
+                "gg.finalgrade AS grade, gi.grademax AS max_grade "
+                "FROM mdl_grade_grades gg "
+                "JOIN mdl_grade_items gi ON gi.id = gg.itemid "
+                "JOIN mdl_course c ON c.id = gi.courseid "
+                "WHERE gg.userid = %s AND gi.itemtype = 'course' "
+                "AND gg.finalgrade IS NOT NULL "
+                "ORDER BY c.fullname",
+                (moodle_id,),
+            )
+            grades = cur.fetchall()
+            profile["grades"] = grades
+
+            # Compute average grade percentage
+            if grades:
+                pcts = [
+                    float(g["grade"]) / float(g["max_grade"]) * 100
+                    for g in grades
+                    if g["max_grade"] and float(g["max_grade"]) > 0
+                ]
+                profile["average_grade_percent"] = round(sum(pcts) / len(pcts), 2) if pcts else 0
+            else:
+                profile["average_grade_percent"] = 0
+
+    return profile
+
+
+def _mentor_lookup(user: Optional[Dict], assignments_path: str) -> Dict[str, Any]:
+    """
+    Mentor lookup — uses mentor_assignments.json overlay
+    since mentor data isn't in Moodle core.
+    """
+    if not user:
+        raise ValueError("No matching student was found for mentor lookup.")
+
+    fullname = f"{user['firstname']} {user['lastname']}".strip()
+    moodle_id = str(user["id"])
+
+    # Check overlay file
+    path = Path(assignments_path)
+    mentor = {"name": "", "email": "", "phone": ""}
+    if path.exists():
+        try:
+            overrides = json.loads(path.read_text(encoding="utf-8"))
+            if moodle_id in overrides:
+                mentor = overrides[moodle_id]
+        except json.JSONDecodeError:
+            pass
 
     return {
-        # Identity
-        "faculty_id":    faculty_id,
-        "name":          fac_dir_entry.get("name", faculty_id),
-        "email":         fac_dir_entry.get("email", ""),
-        "phone":         fac_dir_entry.get("phone", ""),
-        "department":    "Information Science and Engineering",
-        "role":          fac_dir_entry.get("role", "Faculty"),
-        # Teaching scope
-        "courses":       courses,
-        "sections":      sections,
-        "student_count": student_count,
-        # Class teacher role
-        "class_teacher_sections": ct_sections,
-        # Mentor role
-        "mentee_count":  mentee_count,
-        # Aggregate student stats
-        "avg_attendance": avg_att,
-        "avg_cgpa":       avg_cgpa,
-        "backlog_students":backlog_students,
+        "student_id": user["id"],
+        "name": fullname,
+        "mentor": {
+            "name": mentor.get("mentor_name", "Not assigned"),
+            "email": mentor.get("mentor_email", ""),
+            "phone": mentor.get("mentor_phone", ""),
+        },
     }
 
 
-# ── RBAC-aware data access ────────────────────────────────────────────────────
-
-def _scoped_frame(df: pd.DataFrame, identity: RoleIdentity) -> pd.DataFrame:
+def _backlog_report(course: Optional[Dict], user: Optional[Dict]) -> Dict[str, Any]:
     """
-    Return the subset of df the identity is allowed to see.
-
-      admin   → full frame
-      faculty → rows where they are the course instructor or class teacher
-      student → only their own row
-      unknown → empty frame
+    Backlog = course total grade below passing threshold.
+    We define 'backlog' as finalgrade < 40% of grademax.
     """
-    if identity.role == "admin":
-        return df
-    if identity.role == "faculty":
-        return faculty_scope(identity, df)
-    if identity.role == "student":
-        return student_scope(identity, df)
-    # unknown
-    return df.iloc[0:0]
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            query = (
+                "SELECT u.id AS student_id, "
+                "CONCAT(u.firstname, ' ', u.lastname) AS name, "
+                "c.fullname AS course, "
+                "gg.finalgrade AS grade, gi.grademax AS max_grade "
+                "FROM mdl_grade_grades gg "
+                "JOIN mdl_grade_items gi ON gi.id = gg.itemid "
+                "JOIN mdl_course c ON c.id = gi.courseid "
+                "JOIN mdl_user u ON u.id = gg.userid "
+                "WHERE gi.itemtype = 'course' "
+                "AND gg.finalgrade IS NOT NULL "
+                "AND gi.grademax > 0 "
+                "AND (gg.finalgrade / gi.grademax) < 0.4 "
+                "AND u.deleted = 0 "
+            )
+            params: list = []
+
+            if course:
+                query += "AND c.id = %s "
+                params.append(course["id"])
+
+            if user:
+                query += "AND u.id = %s "
+                params.append(user["id"])
+
+            query += "ORDER BY name LIMIT 30"
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+            students: list = []
+            seen: dict = {}
+            for r in rows:
+                sid = r["student_id"]
+                if sid not in seen:
+                    seen[sid] = {
+                        "student_id": sid,
+                        "name": r["name"],
+                        "backlog_count": 0,
+                        "backlog_courses": [],
+                    }
+                seen[sid]["backlog_count"] += 1
+                seen[sid]["backlog_courses"].append(r["course"])
+
+            students = list(seen.values())
+
+            return {
+                "count_with_backlogs": len(students),
+                "students": students,
+            }
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+def _contact_lookup(user: Optional[Dict]) -> Dict[str, Any]:
+    """Contact details for a student."""
+    if not user:
+        raise ValueError("No matching student was found for contact lookup.")
+
+    fullname = f"{user['firstname']} {user['lastname']}".strip()
+    return {
+        "student_id": user["id"],
+        "name": fullname,
+        "student_contact": {
+            "email": user.get("email", ""),
+            "phone": user.get("phone1", ""),
+            "phone2": user.get("phone2", ""),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# User context (dashboard data)
+# ---------------------------------------------------------------------------
 
 def get_user_context(
-    data_path: str,
-    user_id: str,
-    role: str,
-    assignments_path: str | None = None,
-    identity: RoleIdentity | None = None,
+    data_path: str = "",
+    user_id: str = "",
+    role: str = "unknown",
+    assignments_path: str = "",
 ) -> Dict[str, Any]:
     """
-    Build the UI context payload.
-
-    Students only see their own profile.
-    Faculty only see overview counts/courses scoped to their own sections.
-    Admin sees everything.
+    Build a role-scoped dashboard context for the user.
+    Replaces the CSV-based version.
     """
-    from auth import resolve_identity  # local import avoids circular at module level
+    user = _find_user(user_id)
+    profile = None
 
-    if identity is None:
-        identity = resolve_identity(user_id)
-
-    df = _apply_mentor_overrides(_load_student_frame(data_path), assignments_path)
-    scoped = _scoped_frame(df, identity)
-
-    # Profile: students get their own row; faculty get a rich faculty card;
-    # admin gets a high-level summary card.
-    profile: Dict[str, Any] | None = None
-    if identity.role == "student":
-        record = _find_student_row(df, identity.canonical)
-        profile = _record_to_profile(record) if record is not None else None
-    elif identity.role == "faculty":
-        if not scoped.empty:
-            profile = _record_to_faculty_profile(identity.canonical, scoped, df)
-    elif identity.role == "admin":
-        # Admin sees a campus-wide summary as their "profile"
+    if user:
+        fullname = f"{user['firstname']} {user['lastname']}".strip()
         profile = {
-            "faculty_id":     identity.canonical,
-            "name":           "Administrator",
-            "email":          "",
-            "phone":          "",
-            "department":     "Information Science and Engineering",
-            "role":           "Admin",
-            "courses":        sorted(df["course"].dropna().unique().tolist()),
-            "sections":       sorted(df["section"].dropna().unique().tolist()),
-            "student_count":  int(df.shape[0]),
-            "class_teacher_sections": [],
-            "mentee_count":   0,
-            "avg_attendance": round(float(df["attendance_percent"].mean()), 1),
-            "avg_cgpa":       round(float(df["cgpa"].mean()), 2),
-            "backlog_students":int((df["backlog_count"] > 0).sum()),
+            "id": user["id"],
+            "name": fullname,
+            "username": user["username"],
+            "email": user["email"],
+            "department": user.get("department", ""),
         }
 
-    # Mentor directory: only from scoped rows (faculty sees their own students' mentors)
-    mentor_directory = sorted(
-        {
-            (row["mentor_name"], row["mentor_email"], row["mentor_phone"])
-            for _, row in scoped.iterrows()
-            if row["mentor_name"]
-        }
-    )
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Total students
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM mdl_user_info_data "
+                "WHERE fieldid = 1 AND TRIM(data) = 'Student'",
+            )
+            student_count = cur.fetchone()["cnt"]
 
-    return {
-        "role":    identity.role,
+            # Course list (just names, limited)
+            cur.execute(
+                "SELECT fullname FROM mdl_course "
+                "WHERE id > 1 ORDER BY fullname LIMIT 20",
+            )
+            courses = [r["fullname"] for r in cur.fetchall()]
+
+    return _clean({
+        "role": role,
         "user_id": user_id,
         "profile": profile,
         "overview": {
-            "students": int(scoped.shape[0]),
-            "courses":  sorted(scoped["course"].dropna().unique().tolist()),
-            "sections": sorted(scoped["section"].dropna().unique().tolist()),
+            "students": student_count,
+            "courses": courses,
         },
-        "mentor_directory": [
-            {"name": name, "email": email, "phone": phone}
-            for name, email, phone in mentor_directory
-        ],
-        "faculty_directory": FACULTY_DIRECTORY,
         "permissions": {
-            "can_assign_mentor":    identity.can("assign_mentor"),
-            "can_view_all_students":identity.can("view_all_students"),
+            "can_assign_mentor": role in {"faculty", "admin"},
+            "can_view_all_students": role in {"faculty", "admin"},
         },
-    }
+    })
 
 
-def assign_mentor(
-    data_path: str,
-    assignments_path: str,
-    actor_role: str,
-    actor_user_id: str,
-    student_id: str,
-    mentor_name: str,
-    mentor_email: str = "",
-    mentor_phone: str = "",
-    identity: RoleIdentity | None = None,
-) -> Dict[str, Any]:
-    """
-    Assign a mentor to a student.
-
-    Faculty can only assign mentors to students in their own courses/sections.
-    Admin can assign to any student.
-    """
-    from auth import resolve_identity, check_permission
-
-    if identity is None:
-        identity = resolve_identity(actor_user_id)
-
-    # Top-level permission gate
-    check_permission(identity, "assign_mentor")
-
-    df = _load_student_frame(data_path)
-    target = _find_student_row(df, student_id)
-    if target is None:
-        raise ValueError(f"Student '{student_id}' was not found in the dataset.")
-
-    # Faculty scope check: the target student must be in the faculty's own courses
-    if identity.role == "faculty":
-        scoped = faculty_scope(identity, df)
-        if scoped[scoped["student_id"] == target["student_id"]].empty:
-            raise PermissionError(
-                f"[FACULTY] You can only assign mentors to students in your own courses/sections. "
-                f"Student '{student_id}' is not in your scope."
-            )
-
-    overrides = _load_mentor_overrides(assignments_path)
-    overrides[target["student_id"]] = {
-        "mentor_name":  mentor_name.strip(),
-        "mentor_email": mentor_email.strip(),
-        "mentor_phone": mentor_phone.strip(),
-        "assigned_by":  actor_user_id.strip(),
-    }
-    _save_mentor_overrides(assignments_path, overrides)
-
-    updated_df     = _apply_mentor_overrides(df, assignments_path)
-    updated_record = _find_student_row(updated_df, target["student_id"])
-    return {
-        "message": f"Mentor updated for {target['name']}.",
-        "student": _record_to_profile(updated_record),
-    }
-
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 
 def retrieve_data(
-    data_path: str,
-    intent: str,
-    entity: str,
+    data_path: str = "",
+    intent: str = "general",
+    entity: str = "general",
     role: str = "unknown",
-    user_id: str | None = None,
-    assignments_path: str | None = None,
-    identity: RoleIdentity | None = None,
+    user_id: str = "",
+    assignments_path: str = "",
 ) -> Dict[str, Any]:
     """
-    Retrieve and filter data according to RBAC rules.
-
-    - admin   : sees all rows, all intents allowed.
-    - faculty : sees only rows in their own courses/sections.
-                Accessing another faculty's course raises PermissionError.
-    - student : can only query data that resolves to their own record.
-                Any intent that would expose other students is blocked.
-    - unknown : blocked for all organisational intents.
+    Main retrieval function. Routes by intent to the appropriate SQL query.
+    Keeps the same signature as the CSV version so callers don't change.
     """
-    from auth import resolve_identity, check_permission, action_for_intent_and_role
+    course = _find_course(entity)
+    user = _find_user(user_id)
+    target_user = _find_user(entity) if entity and entity.lower() != "general" else None
 
-    if identity is None:
-        identity = resolve_identity(user_id or "")
+    # For student-specific intents, prefer target_user, fall back to requester
+    lookup_user = target_user or user
 
-    # ── Permission gate ──────────────────────────────────────────────────────
-    required_action = action_for_intent_and_role(intent, identity.role)
-    check_permission(identity, required_action)
-
-    # ── Load & scope the base frame ──────────────────────────────────────────
-    df_full   = _apply_mentor_overrides(_load_student_frame(data_path), assignments_path)
-    df_scoped = _scoped_frame(df_full, identity)
-
-    # Resolve course from both frames
-    course_in_full   = _find_course(df_full, entity)
-    course_in_scoped = _find_course(df_scoped, entity)
-
-    # ── Faculty cross-scope guard (entity-based) ─────────────────────────────
-    # If entity names a real course that exists in the full dataset but NOT in
-    # the faculty's scoped frame, block immediately.
-    if identity.role == "faculty" and course_in_full and not course_in_scoped:
-        raise PermissionError(
-            f"[FACULTY] You do not have access to course '{course_in_full}'. "
-            "You can only view data for courses where you are the assigned faculty or class teacher."
-        )
-
-    # ── Faculty cross-scope guard (raw-query / full-text fallback) ──────────
-    # The classifier sometimes returns entity="general" even when the query
-    # explicitly names a course ("get me students from Cloud Computing").
-    # main.py now passes the full raw query as entity for faculty, so
-    # _find_course will scan the text and find the course name.
-    # Belt-and-suspenders: if we still have no course match, check whether
-    # any course name from the *full* dataset appears verbatim in the entity
-    # string (which may be the full query text) and block if it's out of scope.
-    if identity.role == "faculty" and not course_in_full:
-        entity_lower = (entity or "").lower()
-        for c in df_full["course"].dropna().unique():
-            if c.lower() in entity_lower:
-                # Found a course name in the query — check if it's in scope
-                if _find_course(df_scoped, c) is None:
-                    raise PermissionError(
-                        f"[FACULTY] You do not have access to course '{c}'. "
-                        "You can only view data for courses where you are the assigned faculty or class teacher."
-                    )
-                break
-
-    course = course_in_scoped   # safe to use from here on
-    requester_record = _find_student_row(df_full, _extract_student_id(user_id))
-
-    # For student_profile / mentor / contact / class_teacher intents, the
-    # "target" is always the requesting student (students cannot look up others).
-    if identity.role == "student":
-        target_record = requester_record
-    else:
-        # Faculty/admin: entity may name a specific student
-        target_record = _find_student_row(df_scoped, entity) or requester_record
-
-    # Further narrow by course if one was resolved
-    filtered = df_scoped[df_scoped["course"] == course].copy() if course else df_scoped.copy()
-
-    # ── Extra student guard ──────────────────────────────────────────────────
-    # Students must never receive other students' data, regardless of intent.
-    if identity.role == "student":
-        if requester_record is not None:
-            usn = requester_record["student_id"]
-            filtered = filtered[filtered["student_id"] == usn]
-        else:
-            filtered = filtered.iloc[0:0]
-
-    # ── Faculty empty-result guard ───────────────────────────────────────────
-    # If after all filtering the faculty still gets zero rows for a specific
-    # course request, deny rather than silently return wrong data.
-    if identity.role == "faculty" and course and filtered.empty:
-        raise PermissionError(
-            f"[FACULTY] You do not have access to course '{course}'. "
-            "You can only view data for courses where you are the assigned faculty or class teacher."
-        )
-
-    # ── Build result payload ─────────────────────────────────────────────────
     result: Dict[str, Any] = {
         "intent": intent,
-        "entity": course or (
-            target_record["student_id"]
-            if target_record is not None and entity != "general"
-            else "general"
-        ),
-        "records": filtered.to_dict(orient="records"),
-        # raw_csv_data is scoped — never leaks data outside the identity's scope
-        "raw_csv_data": df_scoped.to_dict(orient="records"),
+        "entity": course["fullname"] if course else (entity if entity != "general" else "general"),
+        "records": [],       # kept for backward compat with _compact_payload
+        "summary": {},
     }
 
-    # ── Intent-specific summaries ────────────────────────────────────────────
-
     if intent == "student_count":
-        result["summary"] = {
-            "count":  int(filtered.shape[0]),
-            "course": course or "all_courses",
-        }
+        result["summary"] = _student_count(course, entity)
 
     elif intent == "course_enrollment":
-        result["summary"] = {
-            "course":  course or "all_courses",
-            "count":   int(filtered.shape[0]),
-            "students": filtered[["student_id", "name", "section", "semester"]].head(50).to_dict(orient="records"),
-        }
+        result["summary"] = _course_enrollment(course, entity, user if role == "student" else None)
 
     elif intent == "faculty_list":
-        faculty_rows = (
-            filtered[["faculty", "class_teacher_name", "mentor_name"]]
-            .fillna("").astype(str)
-        )
-        names = sorted(
-            {
-                name.strip()
-                for name in faculty_rows.values.flatten().tolist()
-                if name and name.strip() and name != "0"
-            }
-        )
-        result["summary"] = {
-            "course":  course or "all_courses",
-            "faculty": names,
-            "count":   len(names),
-        }
+        result["summary"] = _faculty_list(course, entity)
 
     elif intent == "grades_average":
-        tmp = filtered.copy()
-        tmp["grade_points"] = tmp["grade"].map(GRADE_MAP).fillna(0)
-        if course:
-            result["summary"] = {
-                "course":              course,
-                "average_grade_point": round(float(tmp["grade_points"].mean()), 2),
-                "average_cgpa":        round(float(tmp["cgpa"].mean()), 2),
-            }
-        else:
-            grouped = (
-                tmp.groupby("course", as_index=False)[["grade_points", "cgpa"]]
-                .mean().round(2)
-            )
-            result["summary"] = {"course_averages": grouped.to_dict(orient="records")}
+        result["summary"] = _grades_average(course, entity)
 
     elif intent == "attendance_report":
-        result["summary"] = {
-            "course":                    course or "all_courses",
-            "average_attendance_percent":round(float(filtered["attendance_percent"].mean()), 2),
-            "student_count":             int(filtered.shape[0]),
-        }
+        # Pass the specific student if role is student (self-query)
+        att_user = user if role == "student" else lookup_user
+        result["summary"] = _attendance_report(course, entity, att_user if role == "student" else None)
 
     elif intent == "student_profile":
-        if target_record is None:
-            raise ValueError("No matching student profile was found.")
-        result["summary"] = _record_to_profile(target_record)
+        result["summary"] = _student_profile(lookup_user)
 
     elif intent == "mentor_lookup":
-        if target_record is None:
-            raise ValueError("No matching student was found for mentor lookup.")
-        result["summary"] = {
-            "student_id": target_record["student_id"],
-            "name":       target_record["name"],
-            "mentor": {
-                "name":  target_record["mentor_name"],
-                "email": target_record["mentor_email"],
-                "phone": target_record["mentor_phone"],
-            },
-        }
+        result["summary"] = _mentor_lookup(lookup_user, assignments_path)
 
     elif intent == "class_teacher_info":
-        if target_record is None:
+        # Map to faculty list for the student's courses
+        if lookup_user:
+            result["summary"] = _faculty_list(course, entity)
+            result["summary"]["note"] = "Showing course teachers (class teacher is not tracked separately in Moodle)."
+        else:
             raise ValueError("No matching student was found for class teacher lookup.")
-        result["summary"] = {
-            "student_id":  target_record["student_id"],
-            "name":        target_record["name"],
-            "section":     target_record["section"],
-            "class_teacher": {
-                "name":  target_record["class_teacher_name"],
-                "email": target_record["class_teacher_email"],
-                "phone": target_record["class_teacher_phone"],
-            },
-        }
 
     elif intent == "backlog_report":
-        target_frame = filtered
-        if identity.role == "student" and requester_record is not None:
-            # Student sees only their own backlogs
-            target_frame = filtered[filtered["student_id"] == requester_record["student_id"]]
-        result["summary"] = {
-            "count_with_backlogs": int((target_frame["backlog_count"] > 0).sum()),
-            "students": target_frame[target_frame["backlog_count"] > 0][
-                ["student_id", "name", "backlog_count", "backlog_subjects"]
-            ].head(30).to_dict(orient="records"),
-        }
+        result["summary"] = _backlog_report(course, lookup_user if role == "student" else None)
 
     elif intent == "contact_lookup":
-        if target_record is None:
-            raise ValueError("No matching student was found for contact lookup.")
-        result["summary"] = {
-            "student_id": target_record["student_id"],
-            "name":       target_record["name"],
-            "student_contact": {
-                "phone":          target_record["phone"],
-                "college_email":  target_record["college_email"],
-                "personal_email": target_record["personal_email"],
-            },
-            "mentor_contact": {
-                "name":  target_record["mentor_name"],
-                "email": target_record["mentor_email"],
-                "phone": target_record["mentor_phone"],
-            },
-            "class_teacher_contact": {
-                "name":  target_record["class_teacher_name"],
-                "email": target_record["class_teacher_email"],
-                "phone": target_record["class_teacher_phone"],
-            },
-        }
+        result["summary"] = _contact_lookup(lookup_user)
 
     else:
         result["summary"] = {
-            "count":   int(filtered.shape[0]),
-            "message": "Organisational query matched the dataset but no specialised intent was triggered.",
+            "message": "Query matched the database but no specialized intent was triggered.",
         }
 
-    if identity.role == "student" and requester_record is not None:
+    # Add requester context for student role
+    if role == "student" and user:
         result["requester_context"] = {
-            "student_id": requester_record["student_id"],
-            "course":     requester_record["course"],
-            "section":    requester_record["section"],
+            "student_id": user["id"],
+            "name": f"{user['firstname']} {user['lastname']}".strip(),
         }
 
-    return result
+    return _clean(result)
+
+
+# ---------------------------------------------------------------------------
+# Mentor assignment (kept from original — writes to JSON overlay)
+# ---------------------------------------------------------------------------
+
+def assign_mentor(
+    data_path: str = "",
+    assignments_path: str = "",
+    actor_role: str = "",
+    actor_user_id: str = "",
+    student_id: str = "",
+    mentor_name: str = "",
+    mentor_email: str = "",
+    mentor_phone: str = "",
+) -> Dict[str, Any]:
+    """Assign a mentor to a student. Writes to JSON overlay file."""
+    if actor_role not in {"faculty", "admin"}:
+        raise PermissionError("Only faculty or admin users can assign mentors.")
+
+    student = _find_user(student_id)
+    if not student:
+        raise ValueError(f"Student '{student_id}' was not found.")
+
+    path = Path(assignments_path)
+    overrides: dict = {}
+    if path.exists():
+        try:
+            overrides = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
+
+    sid = str(student["id"])
+    overrides[sid] = {
+        "mentor_name": mentor_name.strip(),
+        "mentor_email": mentor_email.strip(),
+        "mentor_phone": mentor_phone.strip(),
+        "assigned_by": actor_user_id.strip(),
+    }
+    path.write_text(json.dumps(overrides, indent=2), encoding="utf-8")
+
+    fullname = f"{student['firstname']} {student['lastname']}".strip()
+    return {
+        "message": f"Mentor updated for {fullname}.",
+        "student_id": student["id"],
+        "student_name": fullname,
+        "mentor": overrides[sid],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Quick test
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    print("=== Student Count (all) ===")
+    r = retrieve_data(intent="student_count", entity="general")
+    print(r["summary"])
+
+    print("\n=== Course Enrollment (first course match) ===")
+    r = retrieve_data(intent="course_enrollment", entity="Operating Systems")
+    print(r["summary"])
+
+    print("\n=== Faculty List ===")
+    r = retrieve_data(intent="faculty_list", entity="Operating Systems")
+    print(r["summary"])
+
+    print("\n=== Student Profile (user 9) ===")
+    r = retrieve_data(intent="student_profile", entity="9", user_id="9")
+    print(r["summary"])
+
+    print("\n=== Attendance Report (user 9) ===")
+    r = retrieve_data(intent="attendance_report", entity="general", role="student", user_id="9")
+    print(r["summary"])
